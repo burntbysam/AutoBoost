@@ -25,11 +25,15 @@ HOW TO RUN
 1. On the RDP workstation, same session as Boost:
        pip install --user pywinauto
 2. Open the Design view of a part, select the placed part-number text so the
-   Properties panel showing "More..." is visible.
-3. Run (note forward slashes -- they avoid the backslash-escape trap):
-       python tools/probe_uia.py --title "Boost - Design" --depth 9 > uia_dump.txt 2>&1
-   For the Home screen instead:
-       python tools/probe_uia.py --title "HomeZone" --depth 9 > uia_dump_home.txt 2>&1
+   Properties panel showing "More..." is visible. Leaving the Home screen open
+   too is fine -- both Boost windows get dumped.
+3. Run WITHOUT passing a title on the command line:
+       python tools/probe_uia.py > uia_dump.txt 2>&1
+   (The default matches "TruTops Boost" and console/terminal windows are
+   excluded. Do NOT pass --title with the window name: Windows Terminal echoes
+   your command line into its own title bar, so a title like "Boost - Design"
+   would match the terminal instead of Boost -- which is exactly what happened
+   before.)
 
 WHAT TO SEND BACK
 -----------------
@@ -75,7 +79,19 @@ def _fmt(info) -> str:
     return "  ".join(parts)
 
 
+# Console/terminal window classes to exclude so the probe never dumps itself.
+_TERMINAL_CLASSES = {
+    "CASCADIA_HOSTING_WINDOW_CLASS",   # Windows Terminal
+    "ConsoleWindowClass",              # classic conhost
+    "PseudoConsoleWindow",
+}
+
+_ELEMENT_CAP = 4000  # stop after this many nodes so the dump stays manageable
+
+
 def _walk(info, depth: int, max_depth: int, max_children: int, counter: list[int]) -> None:
+    if counter[0] >= _ELEMENT_CAP:
+        return
     print(f"{'  ' * depth}- {_fmt(info)}")
     counter[0] += 1
     if depth >= max_depth:
@@ -108,16 +124,31 @@ def main() -> int:
         print("    pip install --user pywinauto")
         return 2
 
+    import os
+    own_pid = os.getpid()
+
     desktop = Desktop(backend="uia")
-    print(f"Searching for top-level windows matching title ~ '{args.title}' ...\n")
+    print(f"Searching for top-level windows matching title ~ '{args.title}' "
+          f"(excluding console/terminal windows) ...\n")
 
     matches = []
     for win in desktop.windows():
         try:
-            title = win.window_text()
+            title = win.window_text() or ""
         except Exception:
             title = ""
-        if args.title.lower() in (title or "").lower():
+        try:
+            cls = win.class_name() or ""
+        except Exception:
+            cls = ""
+        try:
+            pid = win.process_id()
+        except Exception:
+            pid = None
+        # Never match our own console or any terminal/console host window.
+        if pid == own_pid or cls in _TERMINAL_CLASSES or "probe_uia" in title.lower():
+            continue
+        if args.title.lower() in title.lower():
             matches.append((title, win))
 
     if not matches:
@@ -139,7 +170,8 @@ def main() -> int:
             _walk(win.element_info, 0, args.depth, args.max_children, counter)
         except Exception as exc:  # noqa: BLE001 - diagnostic tool
             print(f"  Could not walk tree: {exc!r}")
-        print(f"\n[{counter[0]} elements printed for this window]\n")
+        capped = " (element cap reached; tree truncated)" if counter[0] >= _ELEMENT_CAP else ""
+        print(f"\n[{counter[0]} elements printed for this window{capped}]\n")
 
     print("Done. Send the full output back to continue.")
     return 0
