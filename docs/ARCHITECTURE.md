@@ -79,8 +79,8 @@ autoboost/
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
     placement.py         [built]   safe placement via distance transform
+    verify.py            [built]   post-save collision check (before/after diff)
     text_detect.py       [planned] locate placed yellow text (port + harden)
-    verify.py            [planned] post-save collision check
   navigator/
     base.py              [planned] navigator interface
     uia_nav.py           [planned, pending probe] pywinauto implementation

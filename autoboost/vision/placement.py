@@ -130,6 +130,15 @@ def _valid_body_mask(canvas_bgr: np.ndarray, cfg: Config) -> tuple[np.ndarray, n
     return body, outline
 
 
+def body_mask(canvas_bgr: np.ndarray, cfg: Config = DEFAULT) -> np.ndarray:
+    """Public accessor for the valid-body mask of a canvas crop (holes excluded).
+
+    Shared with vision/verify.py so both use identical segmentation.
+    """
+    body, _ = _valid_body_mask(canvas_bgr, cfg)
+    return body
+
+
 def find_safe_placement(
     screen_bgr: np.ndarray,
     cfg: Config = DEFAULT,
