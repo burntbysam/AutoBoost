@@ -107,6 +107,35 @@ def _walk(info, depth: int, max_depth: int, max_children: int, counter: list[int
         print(f"{'  ' * (depth + 1)}... (+{len(children) - max_children} more siblings)")
 
 
+def _find_subtrees(info, needle: str, found: list, max_depth: int, depth: int = 0):
+    """Collect (up to 6) elements whose name or automation_id contains `needle`.
+
+    Does not descend into a match (avoids nesting duplicate subtrees).
+    """
+    if len(found) >= 6 or depth > max_depth:
+        return found
+    try:
+        name = (info.name or "").lower()
+    except Exception:
+        name = ""
+    try:
+        auto = (info.automation_id or "").lower()
+    except Exception:
+        auto = ""
+    if needle in name or needle in auto:
+        found.append(info)
+        return found
+    try:
+        children = info.children()
+    except Exception:
+        children = []
+    for child in children:
+        _find_subtrees(child, needle, found, max_depth, depth + 1)
+        if len(found) >= 6:
+            break
+    return found
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Dump Boost's UIA control tree.")
     parser.add_argument("--title", default="TruTops Boost",
@@ -115,7 +144,14 @@ def main() -> int:
                         help="Maximum tree depth to print (default: 9).")
     parser.add_argument("--max-children", type=int, default=60,
                         help="Max children printed per node (default: 60).")
+    parser.add_argument("--find", default=None,
+                        help="Dump only subtrees whose name or automation_id "
+                             "contains this substring (case-insensitive). Use to "
+                             "isolate one panel, e.g. --find toolOptionsSideBar.")
     args = parser.parse_args()
+    # When focusing on a subtree, dig deeper by default (property grids nest).
+    if args.find and args.depth < 14:
+        args.depth = 14
 
     try:
         from pywinauto import Desktop
@@ -167,7 +203,15 @@ def main() -> int:
         print("=" * 78)
         counter = [0]
         try:
-            _walk(win.element_info, 0, args.depth, args.max_children, counter)
+            if args.find:
+                roots = _find_subtrees(win.element_info, args.find.lower(), [], 30)
+                if not roots:
+                    print(f"  No element matched --find {args.find!r} in this window.")
+                for root in roots:
+                    print(f"  --- subtree matching {args.find!r} ---")
+                    _walk(root, 1, args.depth, args.max_children, counter)
+            else:
+                _walk(win.element_info, 0, args.depth, args.max_children, counter)
         except Exception as exc:  # noqa: BLE001 - diagnostic tool
             print(f"  Could not walk tree: {exc!r}")
         capped = " (element cap reached; tree truncated)" if counter[0] >= _ELEMENT_CAP else ""
