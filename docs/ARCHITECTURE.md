@@ -24,15 +24,21 @@ The goals of the rebuild are reliability and *testability without live Boost*.
 The work splits cleanly into two problems with different best tools:
 
 1. **Chrome navigation** (buttons, menus, the Properties/font dropdown chain).
-   These are *widgets*. Preferred driver is **UI Automation (UIA)** via
-   `pywinauto`, which reads control identity server-side and is immune to RDP
-   blur and resolution changes -- directly killing the "clicked 'Mode' instead
-   of 'More...'" class of failure. Whether Boost exposes a usable UIA tree is
-   unknown until `tools/probe_uia.py` is run; the navigator is therefore an
-   abstraction with two implementations:
-     - `navigator/uia_nav.py`   (preferred, pending probe result)
-     - `navigator/vision_nav.py` (fallback: region-restricted template matching,
-       ported/hardened from BoostPY v0.01.20)
+   These are *widgets*, driven by **UI Automation (UIA)** via `pywinauto` --
+   control identity server-side, immune to RDP blur and resolution changes,
+   which kills the "clicked 'Mode' instead of 'More...'" class of failure.
+
+   The probes (`tools/probe_uia.py`) confirmed this is viable and is the chosen
+   path. Findings:
+     - HomeZone (WPF): parts list, open/save/close, BOOST all have stable
+       automation_ids (e.g. `List.ResultList.<part>.Description`,
+       `Part.Toolbar.Save`).
+     - Design (WinForms/DotNetBar): ribbon buttons exposed by name ('Save',
+       'Open', ...); the `Dimensions` field is a readable Edit; and the property
+       grid `propertyGrid1` exposes named rows including 'User-defined' and
+       'More...'. So the entire font chain is UIA -- no image templates.
+     - The graphics canvas (`GraphicsWindow`) is opaque -> vision (below).
+   Implemented in `navigator/boost_uia.py`.
 
 2. **Canvas geometry** (choosing where the part-number goes). The drawing canvas
    is a rendered viewport -- UIA cannot see into it -- so this is *unavoidably
@@ -82,9 +88,7 @@ autoboost/
     verify.py            [built]   post-save collision check (before/after diff)
     text_detect.py       [planned] locate placed yellow text (port + harden)
   navigator/
-    base.py              [planned] navigator interface
-    uia_nav.py           [planned, pending probe] pywinauto implementation
-    vision_nav.py        [planned] template-matching fallback
+    boost_uia.py         [built]   UIA driver: parts list, dims, property grid
   part_cycle.py          [planned] one-part state machine
   runner.py              [planned] job loop
   reset.py               [planned] return-to-Home recovery
