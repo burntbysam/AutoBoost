@@ -88,18 +88,23 @@ _TERMINAL_CLASSES = {
 
 _ELEMENT_CAP = 4000  # stop after this many nodes so the dump stays manageable
 
+# Where the tree dump is written. Prompts/countdown always go to the real
+# console (sys.stdout); with --out the tree goes to a file so the console
+# countdown stays visible even though the dump is captured.
+_OUT = sys.stdout
+
 
 def _walk(info, depth: int, max_depth: int, max_children: int, counter: list[int]) -> None:
     if counter[0] >= _ELEMENT_CAP:
         return
-    print(f"{'  ' * depth}- {_fmt(info)}")
+    print(f"{'  ' * depth}- {_fmt(info)}", file=_OUT)
     counter[0] += 1
     if depth >= max_depth:
         return
     try:
         children = info.children()
     except Exception as exc:  # noqa: BLE001 - diagnostic tool
-        print(f"{'  ' * (depth + 1)}<could not read children: {exc!r}>")
+        print(f"{'  ' * (depth + 1)}<could not read children: {exc!r}>", file=_OUT)
         return
     for child in children[:max_children]:
         _walk(child, depth + 1, max_depth, max_children, counter)
@@ -148,6 +153,17 @@ def main() -> int:
                         help="Dump only subtrees whose name or automation_id "
                              "contains this substring (case-insensitive). Use to "
                              "isolate one panel, e.g. --find toolOptionsSideBar.")
+    parser.add_argument("--all", action="store_true",
+                        help="Dump every non-terminal top-level window (ignore "
+                             "--title). Use to catch transient popups/dropdowns "
+                             "that appear as their own window.")
+    parser.add_argument("--delay", type=float, default=0.0,
+                        help="Seconds to wait before capturing, so you can open "
+                             "and hold a dropdown in Boost first.")
+    parser.add_argument("--out", default=None,
+                        help="Write the tree to this file (the countdown still "
+                             "shows on screen). Use with --delay instead of a "
+                             "shell '>' redirect so you can see the countdown.")
     args = parser.parse_args()
     # When focusing on a subtree, dig deeper by default (property grids nest).
     if args.find and args.depth < 14:
@@ -161,11 +177,30 @@ def main() -> int:
         return 2
 
     import os
+    import time
     own_pid = os.getpid()
 
+    # Route the tree to a file if requested; keep prompts on the console.
+    global _OUT
+    out_file = open(args.out, "w", encoding="utf-8") if args.out else None
+    if out_file:
+        _OUT = out_file
+
+    if args.delay > 0:
+        print(f"Capturing in {args.delay:.0f}s -- switch to Boost now and open "
+              f"(and hold) the dropdown you want captured...", flush=True)
+        remaining = args.delay
+        while remaining > 0:
+            print(f"  {remaining:.0f}...", end=" ", flush=True)
+            time.sleep(min(1.0, remaining))
+            remaining -= 1.0
+        print("capturing.", flush=True)
+
     desktop = Desktop(backend="uia")
-    print(f"Searching for top-level windows matching title ~ '{args.title}' "
-          f"(excluding console/terminal windows) ...\n")
+    header = ("Dumping ALL non-terminal top-level windows"
+              if args.all else
+              f"Searching for top-level windows matching title ~ '{args.title}'")
+    print(f"{header} (excluding console/terminal windows) ...\n", file=_OUT)
 
     matches = []
     for win in desktop.windows():
@@ -184,7 +219,7 @@ def main() -> int:
         # Never match our own console or any terminal/console host window.
         if pid == own_pid or cls in _TERMINAL_CLASSES or "probe_uia" in title.lower():
             continue
-        if args.title.lower() in title.lower():
+        if args.all or args.title.lower() in title.lower():
             matches.append((title, win))
 
     if not matches:
@@ -198,26 +233,29 @@ def main() -> int:
         return 1
 
     for title, win in matches:
-        print("=" * 78)
-        print(f"WINDOW: {title!r}")
-        print("=" * 78)
+        print("=" * 78, file=_OUT)
+        print(f"WINDOW: {title!r}", file=_OUT)
+        print("=" * 78, file=_OUT)
         counter = [0]
         try:
             if args.find:
                 roots = _find_subtrees(win.element_info, args.find.lower(), [], 30)
                 if not roots:
-                    print(f"  No element matched --find {args.find!r} in this window.")
+                    print(f"  No element matched --find {args.find!r} in this window.", file=_OUT)
                 for root in roots:
-                    print(f"  --- subtree matching {args.find!r} ---")
+                    print(f"  --- subtree matching {args.find!r} ---", file=_OUT)
                     _walk(root, 1, args.depth, args.max_children, counter)
             else:
                 _walk(win.element_info, 0, args.depth, args.max_children, counter)
         except Exception as exc:  # noqa: BLE001 - diagnostic tool
-            print(f"  Could not walk tree: {exc!r}")
+            print(f"  Could not walk tree: {exc!r}", file=_OUT)
         capped = " (element cap reached; tree truncated)" if counter[0] >= _ELEMENT_CAP else ""
-        print(f"\n[{counter[0]} elements printed for this window{capped}]\n")
+        print(f"\n[{counter[0]} elements printed for this window{capped}]\n", file=_OUT)
 
-    print("Done. Send the full output back to continue.")
+    print("Done. Send the full output back to continue.", file=_OUT)
+    if out_file:
+        out_file.close()
+        print(f"Wrote dump to {args.out}")
     return 0
 
 
