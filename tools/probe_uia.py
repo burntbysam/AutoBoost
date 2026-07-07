@@ -14,26 +14,29 @@ UI is an opaque rendered canvas with no UIA controls, we stay on vision.
 
 This script answers that question. It does NOT change anything in Boost.
 
+WINDOW TITLES (from observation)
+--------------------------------
+  Home screen  : "TruTops Boost - HomeZone"
+  Design view  : "<part> - TruTops Boost - Design"   (title starts with the part)
+So to target the Design view, filter on the stable substring "Boost - Design".
+
 HOW TO RUN
 ----------
-1. On the RDP workstation, in the same session where Boost is visible, install
-   pywinauto (per-user, no admin needed):
+1. On the RDP workstation, same session as Boost:
        pip install --user pywinauto
-2. Open Boost and navigate to the state you care about most -- ideally Design
-   View with a part's Properties panel showing the "More..." affordance -- so
-   those controls are present in the tree.
-3. Run:
-       python probe_uia.py
-   To target a specific window or go deeper:
-       python probe_uia.py --title Boost --depth 8
+2. Open the Design view of a part, select the placed part-number text so the
+   Properties panel showing "More..." is visible.
+3. Run (note forward slashes -- they avoid the backslash-escape trap):
+       python tools/probe_uia.py --title "Boost - Design" --depth 9 > uia_dump.txt 2>&1
+   For the Home screen instead:
+       python tools/probe_uia.py --title "HomeZone" --depth 9 > uia_dump_home.txt 2>&1
 
 WHAT TO SEND BACK
 -----------------
-Copy the whole console output (or redirect to a file:
-    python probe_uia.py > uia_dump.txt 2>&1
-and send uia_dump.txt). The presence/absence of named Button/MenuItem/List
-controls -- especially anything like "More", "Add", "Font type" -- decides the
-navigation architecture.
+Send the whole output file. Named Button / MenuItem / List / Edit controls --
+especially anything like "More", "Add", "Font type", or the "Dimensions" field --
+mean UIA navigation is viable. A tree that is essentially empty (just a top-level
+window and a single "pane"/custom render surface) means we stay on vision.
 """
 
 from __future__ import annotations
@@ -42,16 +45,60 @@ import argparse
 import sys
 
 
+def _fmt(info) -> str:
+    """One-line description of a UIA element, tolerant of missing attributes."""
+    def safe(getter, default=""):
+        try:
+            val = getter()
+            return val if val is not None else default
+        except Exception:
+            return default
+
+    ctrl = safe(lambda: info.control_type, "?")
+    name = safe(lambda: info.name, "")
+    auto = safe(lambda: info.automation_id, "")
+    cls = safe(lambda: info.class_name, "")
+    try:
+        r = info.rectangle
+        rect = f"({r.left},{r.top},{r.right},{r.bottom})"
+    except Exception:
+        rect = ""
+    parts = [f"{ctrl}"]
+    if name:
+        parts.append(f"name={name!r}")
+    if auto:
+        parts.append(f"auto_id={auto!r}")
+    if cls:
+        parts.append(f"class={cls!r}")
+    if rect:
+        parts.append(rect)
+    return "  ".join(parts)
+
+
+def _walk(info, depth: int, max_depth: int, max_children: int, counter: list[int]) -> None:
+    print(f"{'  ' * depth}- {_fmt(info)}")
+    counter[0] += 1
+    if depth >= max_depth:
+        return
+    try:
+        children = info.children()
+    except Exception as exc:  # noqa: BLE001 - diagnostic tool
+        print(f"{'  ' * (depth + 1)}<could not read children: {exc!r}>")
+        return
+    for child in children[:max_children]:
+        _walk(child, depth + 1, max_depth, max_children, counter)
+    if len(children) > max_children:
+        print(f"{'  ' * (depth + 1)}... (+{len(children) - max_children} more siblings)")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Dump Boost's UIA control tree.")
-    parser.add_argument(
-        "--title", default="Boost",
-        help="Substring of the target window title (default: 'Boost').",
-    )
-    parser.add_argument(
-        "--depth", type=int, default=7,
-        help="Maximum tree depth to print (default: 7).",
-    )
+    parser.add_argument("--title", default="TruTops Boost",
+                        help="Substring of the target window title.")
+    parser.add_argument("--depth", type=int, default=9,
+                        help="Maximum tree depth to print (default: 9).")
+    parser.add_argument("--max-children", type=int, default=60,
+                        help="Max children printed per node (default: 60).")
     args = parser.parse_args()
 
     try:
@@ -61,8 +108,8 @@ def main() -> int:
         print("    pip install --user pywinauto")
         return 2
 
-    print(f"Searching for top-level windows matching title ~ '{args.title}' ...")
     desktop = Desktop(backend="uia")
+    print(f"Searching for top-level windows matching title ~ '{args.title}' ...\n")
 
     matches = []
     for win in desktop.windows():
@@ -71,35 +118,30 @@ def main() -> int:
         except Exception:
             title = ""
         if args.title.lower() in (title or "").lower():
-            matches.append(win)
+            matches.append((title, win))
 
     if not matches:
-        print("No matching window found. Open windows were:")
+        print("No matching window found. Open top-level windows were:")
         for win in desktop.windows():
             try:
-                print(f"  - {win.window_text()!r}  [{win.class_name()}]")
+                print(f"  - {win.window_text()!r}  [class={win.class_name()!r}]")
             except Exception:
                 pass
-        print("\nRe-run with --title <substring> matching Boost's window title.")
+        print("\nRe-run with --title <substring> from the list above.")
         return 1
 
-    for win in matches:
+    for title, win in matches:
         print("=" * 78)
-        try:
-            print(f"WINDOW: {win.window_text()!r}  class={win.class_name()!r}")
-        except Exception:
-            print("WINDOW: <unreadable title>")
+        print(f"WINDOW: {title!r}")
         print("=" * 78)
+        counter = [0]
         try:
-            # print_control_identifiers is the most informative dump: it lists
-            # control_type, title, auto_id and how to reference each control.
-            win.print_control_identifiers(depth=args.depth)
-        except Exception as exc:  # noqa: BLE001 - diagnostic tool, report anything
-            print(f"  Could not dump control identifiers: {exc!r}")
-            print("  This often means the UI is a single opaque render surface")
-            print("  (no child UIA controls) -> vision navigation required.")
+            _walk(win.element_info, 0, args.depth, args.max_children, counter)
+        except Exception as exc:  # noqa: BLE001 - diagnostic tool
+            print(f"  Could not walk tree: {exc!r}")
+        print(f"\n[{counter[0]} elements printed for this window]\n")
 
-    print("\nDone. Send the full output back to continue.")
+    print("Done. Send the full output back to continue.")
     return 0
 
 
