@@ -162,6 +162,75 @@ class BoostUIA:
         except Exception:
             return False
 
+    # -- Design: font chain (keyboard-driven; the value list is owner-drawn) --
+
+    # When a value row is selected, an in-place editor appears with these ids.
+    _EDITOR_AUTOID = "9765996"     # the WinForms EDIT holding the value
+    _OPEN_AUTOID = "4261530"       # its dropdown 'Open' arrow
+
+    def _select_row_editor(self, row_name: str, timeout: float = 2.0):
+        """Select a property row and return its in-place EDIT wrapper (or None).
+
+        The value dropdown is owner-drawn (invisible to UIA), so we do not touch
+        the list -- we type into this editor instead.
+        """
+        import time
+        try:
+            self._property_grid().child_window(
+                title=row_name, control_type="Button").click_input()
+        except Exception:
+            return None
+        edit = self._property_grid().child_window(auto_id=self._EDITOR_AUTOID)
+        try:
+            edit.wait("exists ready", timeout=timeout)
+            return edit.wrapper_object()
+        except Exception:
+            return None
+
+    def type_value(self, row_name: str, value: str) -> bool:
+        """Select `row_name` and set its value to `value` via keyboard.
+
+        Used for both adding a user-defined property ('More...' -> 'Font type')
+        and setting a value ('Font type' -> 'EasyType-L=10MM'), since both use
+        the same owner-drawn dropdown that only responds to typing/selection.
+        """
+        from pywinauto.keyboard import send_keys
+        editor = self._select_row_editor(row_name)
+        if editor is None:
+            return False
+        try:
+            editor.set_focus()
+        except Exception:
+            pass
+        # Clear anything present, type the exact value, commit with Enter.
+        # value is escaped so characters like -, =, digits are sent literally.
+        try:
+            send_keys("^a{DEL}")
+            send_keys(value, with_spaces=True, pause=0.02)
+            send_keys("{ENTER}")
+            return True
+        except Exception:
+            # Fallback: ValuePattern SetValue (may not always commit).
+            try:
+                editor.set_edit_text(value)
+                send_keys("{ENTER}")
+                return True
+            except Exception:
+                return False
+
+    def add_font_type(self) -> bool:
+        """Add the 'Font type' user-defined property via the 'More...' row."""
+        return self.type_value("More...", "Font type")
+
+    def set_font_type(self, value: str = "EasyType-L=10MM") -> bool:
+        """Set the 'Font type' value (defaults to Iso) to `value`."""
+        return self.type_value("Font type", value)
+
+    def read_editor_value(self, row_name: str) -> str:
+        """Select a row and read back its in-place editor value (for verifying)."""
+        editor = self._select_row_editor(row_name)
+        return _value(editor) if editor is not None else ""
+
     # -- Design: ribbon -----------------------------------------------------
 
     def click_ribbon(self, name: str) -> bool:
@@ -202,12 +271,50 @@ def _selftest() -> int:
     return 0
 
 
+def _do_font_test(add: bool, value: str) -> int:
+    """Observable font-chain test. Mutates the open part -- do NOT save after."""
+    try:
+        boost = BoostUIA()
+    except ImportError:
+        print("pywinauto not installed. Run: pip install --user pywinauto")
+        return 2
+    if not boost.has_design():
+        print("Open a part in Design view with the part-number text selected first.")
+        return 1
+
+    print("NOTE: this changes the open part. Undo (Ctrl+Z) / don't save to revert.\n")
+    if add:
+        print("Adding 'Font type' property via 'More...' ...")
+        print(f"  add_font_type -> {boost.add_font_type()}")
+        import time
+        time.sleep(1.0)
+    print(f"Setting Font type -> {value!r} ...")
+    ok = boost.set_font_type(value)
+    print(f"  set_font_type -> {ok}")
+    import time
+    time.sleep(0.8)
+    print(f"\nRead back Font type value: {boost.read_editor_value('Font type')!r}")
+    print("Compare against what Boost shows on screen and tell me if it took.")
+    return 0 if ok else 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="AutoBoost UIA driver.")
     parser.add_argument("--selftest", action="store_true",
                         help="Read-only connectivity + control check (default).")
+    parser.add_argument("--set-font", metavar="VALUE", default=None,
+                        help="Set the existing 'Font type' row to VALUE "
+                             "(e.g. 'EasyType-L=10MM'). Mutates the open part.")
+    parser.add_argument("--add-and-set-font", metavar="VALUE", default=None,
+                        help="Add the 'Font type' property, then set it to VALUE. "
+                             "Mutates the open part.")
     args = parser.parse_args()
-    return _selftest()  # only mode for now; mutating methods are library-only
+
+    if args.set_font is not None:
+        return _do_font_test(add=False, value=args.set_font)
+    if args.add_and_set_font is not None:
+        return _do_font_test(add=True, value=args.add_and_set_font)
+    return _selftest()
 
 
 if __name__ == "__main__":
