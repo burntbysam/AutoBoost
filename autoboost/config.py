@@ -43,10 +43,14 @@ class CanvasRegion:
 class PlacementConfig:
     """Parameters for the safe-placement vision (see vision/placement.py)."""
 
-    # Canny edge thresholds for extracting part geometry (line drawing).
-    canny_low: int = 40
-    canny_high: int = 120
-    # Dilation to close small gaps in the outline so contours are watertight.
+    # Geometry is extracted by how far a pixel's brightness differs from the
+    # canvas background, NOT by Canny edges. Real Boost screens have a faint
+    # square grid behind the part; a plain edge detector latches onto it and
+    # shatters the interior. A background-difference threshold keeps the strong
+    # dark part geometry and ignores the low-contrast grid. Works for either
+    # polarity (dark-on-light or light-on-dark) because it uses |value - bg|.
+    geometry_delta: int = 80
+    # Dilation to close small gaps in the outline so regions are watertight.
     close_kernel: int = 3
     close_iterations: int = 2
     # Ignore contours smaller than this many pixels (noise / tiny dimension marks).

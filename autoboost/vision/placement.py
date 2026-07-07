@@ -13,11 +13,13 @@ the expanded text needs and reject a part when there is genuinely nowhere safe.
 
 Pipeline (all on the Design-View canvas, after Zoom Extents):
     1. Crop UI chrome to the drawing canvas.
-    2. Canny edges -> geometry outline (polarity independent: works on dark or
-       light canvas).
-    3. Morphological close so the outline is watertight.
-    4. Contour hierarchy: largest outer contour = part boundary; its holes =
-       inner contours. Even-odd fill -> a solid "valid body" mask.
+    2. Background-difference threshold -> geometry outline. Uses |pixel - bg| so
+       it works on a dark or light canvas AND rejects the faint square grid that
+       Boost draws behind the part (a plain edge detector latches onto it).
+    3. Morphological close so the outline forms watertight barriers.
+    4. Label the free (non-outline) regions; the part body is the largest region
+       that does NOT touch the border (exterior touches the border; each hole is
+       its own smaller enclosed region).
     5. Erode slightly for line thickness, distance-transform, take the max.
 
 Run standalone against a saved screenshot to see the choice and a debug overlay:
@@ -74,14 +76,24 @@ def _valid_body_mask(canvas_bgr: np.ndarray, cfg: Config) -> tuple[np.ndarray, n
     pc = cfg.placement
     gray = cv2.cvtColor(canvas_bgr, cv2.COLOR_BGR2GRAY)
 
-    # Canny is independent of whether geometry is dark-on-light or light-on-dark,
-    # which matters because Boost's canvas colour can differ by theme/RDP.
-    edges = cv2.Canny(gray, pc.canny_low, pc.canny_high)
+    # Estimate the canvas background brightness from the border strips (the part
+    # is centred after Zoom Extents, so the outer frame is background).
+    b = max(4, gray.shape[0] // 50)
+    border_px = np.concatenate([
+        gray[:b, :].ravel(), gray[-b:, :].ravel(),
+        gray[:, :b].ravel(), gray[:, -b:].ravel(),
+    ])
+    background = int(np.median(border_px))
+
+    # Geometry = pixels that differ strongly from the background. The faint grid
+    # differs only slightly and is rejected; the dark part lines survive.
+    diff = cv2.absdiff(gray, np.full_like(gray, background))
+    outline = np.where(diff >= pc.geometry_delta, 255, 0).astype(np.uint8)
 
     # Thicken/close the outline so it forms watertight barriers with no leaks
     # between the interior and the exterior.
     k = np.ones((pc.close_kernel, pc.close_kernel), np.uint8)
-    outline = cv2.dilate(edges, k, iterations=pc.close_iterations)
+    outline = cv2.dilate(outline, k, iterations=pc.close_iterations)
     outline = cv2.morphologyEx(outline, cv2.MORPH_CLOSE, k, iterations=pc.close_iterations)
 
     body = np.zeros(gray.shape, np.uint8)
