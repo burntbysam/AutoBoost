@@ -1,0 +1,15 @@
+# AutoBoost dependencies. All are pure pip packages, installable per-user
+# (pip install --user ...) with no admin rights, drivers, or services -- chosen
+# to fit corporate-managed machines.
+
+# --- core (always needed) ---
+pyautogui        # simulated input + locateOnScreen image matching
+opencv-python    # thresholding, contours, distance transform, HSV masks
+numpy            # array math for the vision pipeline
+pillow           # screenshots (pulled in by pyautogui/pyscreeze; pinned explicit)
+
+# --- navigation (UIA path; also used by tools/probe_uia.py) ---
+pywinauto        # Windows UI Automation - drive menus by control identity
+
+# --- optional ---
+keyboard         # global 'q' kill switch (may need privileges to see hotkeys)
