@@ -196,19 +196,33 @@ class BoostUIA:
     _OPEN_AUTOID = "4261530"       # its dropdown 'Open' arrow
 
     def _grid_controls(self) -> dict:
-        """One descendants() sweep -> {'buttons': {name: wrapper}, 'edit', 'open'}."""
+        """One descendants() sweep -> {'buttons': {name: wrapper}, 'edit', 'open'}.
+
+        Identify the in-place editor by control type (Edit) and the dropdown
+        arrow by its name ('Open'). The numeric auto-ids from the probe dumps
+        are DotNetBar runtime ids that change between Boost sessions, so we must
+        NOT depend on them.
+        """
+        def ctype(c):
+            try:
+                return c.element_info.control_type
+            except Exception:
+                return ""
+
         grid = self._property_grid().wrapper_object()
         buttons, edit, openbtn = {}, None, None
         for c in grid.descendants():
-            aid = _auto_id(c)
-            if aid == self._EDITOR_AUTOID:
-                edit = c
-            elif aid == self._OPEN_AUTOID:
-                openbtn = c
-            else:
+            ct = ctype(c)
+            if ct == "Edit" or _auto_id(c) == self._EDITOR_AUTOID:
+                if edit is None:
+                    edit = c
+            elif ct == "Button":
                 name = _text(c)
-                if name and c.element_info.control_type == "Button":
+                if name:
                     buttons.setdefault(name, c)
+                if _auto_id(c) == self._OPEN_AUTOID and openbtn is None:
+                    openbtn = c
+        openbtn = openbtn or buttons.get("Open")
         return {"buttons": buttons, "edit": edit, "open": openbtn}
 
     def property_rows(self) -> list[str]:
