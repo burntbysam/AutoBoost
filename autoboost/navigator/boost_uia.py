@@ -272,6 +272,60 @@ class BoostUIA:
             seen.add(cur.lower())
         return False
 
+    def set_font_type_by_image(self, template_path: str,
+                               target: str = "EasyType-L=10mm",
+                               confidence: float = 0.85) -> bool:
+        """Pick the font by clicking its row in the open (owner-drawn) dropdown.
+
+        The value list renders as pixels with no UIA and the combo commits on the
+        first letter, so keyboard can't reach a specific item -- we click it like
+        a human. Opens the dropdown via UIA, template-matches `template_path`
+        (a tight crop of the target row) on screen, clicks it, and verifies with
+        the read-back oracle. Records the outcome in self.last_value.
+        """
+        import time
+        import pyautogui
+
+        ctrls = self._grid_controls()
+        row = ctrls["buttons"].get("Font type")
+        if row is None:
+            self.last_value = ""
+            return False
+        row.click_input()
+        time.sleep(0.25)
+        ctrls = self._grid_controls()
+        if ctrls["open"] is not None:
+            try:
+                ctrls["open"].click_input()
+                time.sleep(0.35)
+            except Exception:
+                pass
+
+        # Restrict the search to the Design window so stray on-screen text can't
+        # win, then click the matched row's centre.
+        region = None
+        try:
+            r = self.design().rectangle()
+            region = (r.left, r.top, r.width(), r.height())
+        except Exception:
+            pass
+        try:
+            loc = pyautogui.locateCenterOnScreen(
+                template_path, confidence=confidence, region=region)
+        except Exception:
+            loc = None
+        if loc is None:
+            from pywinauto.keyboard import send_keys
+            send_keys("{ESC}")
+            self.last_value = ""
+            return False
+        pyautogui.click(loc)
+        time.sleep(0.3)
+
+        val = self.read_editor_value("Font type")
+        self.last_value = val
+        return val.strip().lower() == target.strip().lower()
+
     def read_editor_value(self, row_name: str) -> str:
         """Read back a row's current committed value (selects the row first)."""
         import time
@@ -345,6 +399,29 @@ def _do_font_test(value: str) -> int:
     return 0 if ok else 2
 
 
+def _do_font_image_test(template: str, target: str) -> int:
+    """Observable vision-click font test. Mutates the open part -- don't save."""
+    import time
+    try:
+        boost = BoostUIA()
+    except ImportError:
+        print("pywinauto not installed. Run: pip install --user pywinauto")
+        return 2
+    if not boost.has_design():
+        print("Open a part in Design view with the Font type row present first.")
+        return 1
+    print("NOTE: this changes the open part. Undo (Ctrl+Z) / don't save to revert.\n")
+    print(f"Picking Font type -> {target!r} by clicking template {template!r} ...")
+    t0 = time.time()
+    ok = boost.set_font_type_by_image(template, target)
+    dt = time.time() - t0
+    print(f"  set_font_type_by_image -> {ok}   (read back: {boost.last_value!r}, {dt:.1f}s)")
+    if not ok and not boost.last_value:
+        print("  (template not found on screen -- recrop tighter, or the dropdown "
+              "didn't open. Tell me and send a screenshot of the open list.)")
+    return 0 if ok else 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="AutoBoost UIA driver.")
     parser.add_argument("--selftest", action="store_true",
@@ -352,8 +429,15 @@ def main() -> int:
     parser.add_argument("--set-font", metavar="VALUE", default=None,
                         help="Set the 'Font type' row to VALUE by letter-cycle "
                              "(e.g. 'EasyType-L=10mm'). Mutates the open part.")
+    parser.add_argument("--set-font-image", metavar="TEMPLATE", default=None,
+                        help="Pick Font type by clicking the row matching this "
+                             "template image in the open dropdown.")
+    parser.add_argument("--target", default="EasyType-L=10mm",
+                        help="Expected value for --set-font-image verification.")
     args = parser.parse_args()
 
+    if args.set_font_image is not None:
+        return _do_font_image_test(args.set_font_image, args.target)
     if args.set_font is not None:
         return _do_font_test(value=args.set_font)
     return _selftest()
