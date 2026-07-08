@@ -439,16 +439,15 @@ class BoostUIA:
                          options: list[str] | None = None,
                          dry_run: bool = False,
                          out_path: str = "font_dropdown.png",
-                         retries: int = 2) -> bool:
-        """Select the font with a held mouse-drag -- the only gesture the
-        control honours (per the observed commit-on-index-change bug).
+                         retries: int = 3) -> bool:
+        """Select the font by clicking its row in the open dropdown.
 
-        Press-and-hold on the dropdown arrow (opens the list and holds it open,
-        so the screenshot reliably catches it), diff before/after to find the
-        list box, drag down to the target row, release to commit. Verifies with
-        the read-back oracle and retries with a corrected offset if it misses.
-        dry_run marks the target row on an overlay and releases without moving
-        (no commit).
+        Recipe (from observed behavior): click the arrow -> the list opens and
+        STAYS open -> single-click the target option to commit. We open with a
+        real OS click, screenshot the (now open) list, diff to find its box, and
+        click the target row. The read-back oracle verifies; on a miss we learn
+        the real row height from which row we hit and click again. dry_run marks
+        the target row on an overlay and closes with Esc (no commit).
         """
         import time
         import numpy as np
@@ -470,24 +469,28 @@ class BoostUIA:
         def gray_shot():
             return cv2.cvtColor(np.array(pyautogui.screenshot()), cv2.COLOR_RGB2GRAY)
 
+        box = None       # (x,y,w,h) of the list, detected once
+        row_h = None     # refined from read-back misses
         for attempt in range(retries + 1):
             before = gray_shot()
-            pyautogui.mouseDown(ax, ay)          # press arrow: opens + holds open
+            pyautogui.click(ax, ay)              # open the list (stays open)
             time.sleep(0.4)
             after_rgb = np.array(pyautogui.screenshot())
             after = cv2.cvtColor(after_rgb, cv2.COLOR_RGB2GRAY)
 
-            diff = cv2.absdiff(before, after)
-            _, th = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
-            th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-            contours, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not contours:
-                pyautogui.mouseUp()
-                send_keys("{ESC}")
-                self.last_value = "<dropdown not detected even while held>"
-                return False
-            x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
-            row_h = h / len(options)
+            if box is None:
+                diff = cv2.absdiff(before, after)
+                _, th = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+                th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+                contours, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if not contours:
+                    send_keys("{ESC}")
+                    self.last_value = "<dropdown not detected>"
+                    return False
+                box = cv2.boundingRect(max(contours, key=cv2.contourArea))
+                row_h = box[3] / len(options)
+
+            x, y, w, h = box
             tx = x + w // 2
             ty = int(y + (idx + 0.5) * row_h)
 
@@ -501,26 +504,22 @@ class BoostUIA:
                     cv2.line(dbg, (x, yy), (x + w, yy), (0, 150, 0), 1)
                 cv2.circle(dbg, (tx, ty), 6, (0, 0, 255), -1)
                 cv2.imwrite(out_path, dbg)
-                pyautogui.moveTo(ax, ay)          # release on the arrow: no commit
-                pyautogui.mouseUp()
-                send_keys("{ESC}")
-                self.last_value = f"<dry-run: box=({x},{y},{w},{h}) target row {idx} at ({tx},{ty})>"
+                send_keys("{ESC}")               # close without committing
+                self.last_value = f"<dry-run: box={box} target row {idx} at ({tx},{ty})>"
                 return True
 
-            pyautogui.moveTo(tx, ty, duration=0.35)   # drag highlight to target
-            time.sleep(0.15)
-            pyautogui.mouseUp()                        # release -> commit
+            pyautogui.click(tx, ty)              # click the option -> commit
             time.sleep(0.3)
             val = self.read_editor_value("Font type")
             self.last_value = val
             if val.strip().lower() == target.strip().lower():
                 return True
-            # Missed: if we can tell which row we hit, correct the row height.
+            # Missed: use which row we actually hit to solve the true row height,
+            # then aim again next loop (re-opens the list).
             if val in options:
                 hit = options.index(val)
-                if hit != idx and abs(hit - idx) >= 1:
-                    row_h = (ty - (y + 0.5 * (h / len(options)))) / max(1, (hit - 0))
-            # otherwise loop and retry with the same geometry
+                if hit != idx:
+                    row_h = (ty - y) / (hit + 0.5)
         return False
 
     def set_font_by_cycle_click(self, target: str = "EasyType-L=10mm",
