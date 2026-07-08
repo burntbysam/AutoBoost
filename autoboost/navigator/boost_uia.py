@@ -326,6 +326,93 @@ class BoostUIA:
         self.last_value = val
         return val.strip().lower() == target.strip().lower()
 
+    # Font dropdown items, top-to-bottom (from the on-screen list). Update this
+    # if the shop's font table changes.
+    FONT_OPTIONS = [
+        "Iso", "Iso Prop", "Bold",
+        "EasyType-L=4mm", "EasyType-L=5mm", "EasyType-L=8mm",
+        "EasyType-L=8.5mm", "EasyType-L=10mm", "Digital Font-H=3mm",
+    ]
+
+    def _open_font_dropdown(self):
+        """Select the Font type row and click its dropdown arrow. Returns the
+        editor wrapper (for read-back) or None."""
+        import time
+        ctrls = self._grid_controls()
+        row = ctrls["buttons"].get("Font type")
+        if row is None:
+            return None
+        row.click_input()
+        time.sleep(0.25)
+        ctrls = self._grid_controls()
+        if ctrls["open"] is not None:
+            try:
+                ctrls["open"].click_input()
+            except Exception:
+                pass
+        time.sleep(0.35)
+        return ctrls["edit"]
+
+    def set_font_type_by_position(self, target: str = "EasyType-L=10mm",
+                                  options: list[str] | None = None,
+                                  dry_run: bool = False,
+                                  out_path: str = "font_dropdown.png") -> bool:
+        """Pick the font by clicking its row in the open owner-drawn list.
+
+        No template needed: screenshot before/after opening the dropdown, diff to
+        find the list box, then click the target's row by its index in `options`.
+        dry_run marks the intended click on a saved overlay and clicks nothing.
+        """
+        import time
+        import numpy as np
+        import cv2
+        import pyautogui
+        from pywinauto.keyboard import send_keys
+
+        options = options or self.FONT_OPTIONS
+        if target not in options:
+            self.last_value = f"<target {target!r} not in options>"
+            return False
+        idx = options.index(target)
+
+        before = cv2.cvtColor(np.array(pyautogui.screenshot()), cv2.COLOR_RGB2GRAY)
+        editor = self._open_font_dropdown()
+        after_rgb = np.array(pyautogui.screenshot())
+        after = cv2.cvtColor(after_rgb, cv2.COLOR_RGB2GRAY)
+
+        # The dropdown is the largest region that changed between the frames.
+        diff = cv2.absdiff(before, after)
+        _, th = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+        contours, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            send_keys("{ESC}")
+            self.last_value = "<dropdown not detected>"
+            return False
+        x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
+
+        row_h = h / len(options)
+        cx = x + w // 2
+        cy = int(y + (idx + 0.5) * row_h)
+
+        if dry_run:
+            dbg = cv2.cvtColor(after_rgb, cv2.COLOR_RGB2BGR)
+            cv2.rectangle(dbg, (x, y), (x + w, y + h), (0, 200, 0), 2)
+            for i in range(len(options) + 1):     # row separators
+                yy = int(y + i * row_h)
+                cv2.line(dbg, (x, yy), (x + w, yy), (0, 150, 0), 1)
+            cv2.circle(dbg, (cx, cy), 6, (0, 0, 255), -1)
+            cv2.imwrite(out_path, dbg)
+            send_keys("{ESC}")
+            self.last_value = f"<dry-run: would click ({cx},{cy}) row {idx} -> {out_path}>"
+            return True
+
+        pyautogui.click(cx, cy)
+        time.sleep(0.3)
+        val = self.read_editor_value("Font type")
+        self.last_value = val
+        return val.strip().lower() == target.strip().lower()
+
     def read_editor_value(self, row_name: str) -> str:
         """Read back a row's current committed value (selects the row first)."""
         import time
@@ -433,9 +520,32 @@ def main() -> int:
                         help="Pick Font type by clicking the row matching this "
                              "template image in the open dropdown.")
     parser.add_argument("--target", default="EasyType-L=10mm",
-                        help="Expected value for --set-font-image verification.")
+                        help="Expected value for the vision font tests.")
+    parser.add_argument("--set-font-pos", action="store_true",
+                        help="Pick the font by clicking its row position in the "
+                             "open dropdown (no template needed).")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="With --set-font-pos: mark the intended click on a "
+                             "saved overlay and click nothing.")
     args = parser.parse_args()
 
+    if args.set_font_pos:
+        try:
+            boost = BoostUIA()
+        except ImportError:
+            print("pywinauto not installed. Run: pip install --user pywinauto")
+            return 2
+        if not boost.has_design():
+            print("Open a part in Design view with the Font type row present first.")
+            return 1
+        mode = "DRY-RUN (nothing clicked)" if args.dry_run else "LIVE (will click)"
+        print(f"{mode}: picking {args.target!r} by dropdown position ...")
+        ok = boost.set_font_type_by_position(args.target, dry_run=args.dry_run)
+        print(f"  result -> {ok}   {boost.last_value!r}")
+        if args.dry_run:
+            print("  Open font_dropdown.png and check the red dot sits on the "
+                  "EasyType-L=10mm row. Send it to me.")
+        return 0 if ok else 2
     if args.set_font_image is not None:
         return _do_font_image_test(args.set_font_image, args.target)
     if args.set_font is not None:
