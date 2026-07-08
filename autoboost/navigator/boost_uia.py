@@ -233,12 +233,80 @@ class BoostUIA:
         except Exception:
             return False
 
+    def enumerate_row_values(self, row_name: str, limit: int = 200) -> list[str]:
+        """Return the selectable values of a row's combo, top to bottom.
+
+        Uses the in-place editor as a live oracle: go to the top with Up, then
+        press Down reading the value each step until it stops changing (bottom).
+        Reveals the owner-drawn list's exact item text.
+        """
+        import time
+        from pywinauto.keyboard import send_keys
+        editor = self._select_row_editor(row_name)
+        if editor is None:
+            return []
+        try:
+            editor.set_focus()
+        except Exception:
+            pass
+        for _ in range(limit):          # climb to the first item
+            send_keys("{UP}")
+        values, last = [], None
+        for _ in range(limit):
+            cur = _value(editor).strip()
+            if cur == last:             # value stopped changing -> bottom
+                break
+            values.append(cur)
+            last = cur
+            send_keys("{DOWN}")
+            time.sleep(0.02)
+        return values
+
+    def _set_row_by_cycle(self, row_name: str, target: str, limit: int = 200) -> bool:
+        """Select a value by arrowing to it, using the read-back as an oracle.
+
+        Robust against similar-prefixed items (EasyType-L=4mm vs =10mm) because
+        it matches the whole committed value rather than relying on incremental
+        typed search.
+        """
+        import time
+        from pywinauto.keyboard import send_keys
+        editor = self._select_row_editor(row_name)
+        if editor is None:
+            return False
+        try:
+            editor.set_focus()
+        except Exception:
+            pass
+        want = target.strip().lower()
+        for _ in range(limit):          # climb to the top first
+            send_keys("{UP}")
+        last = None
+        for _ in range(limit):
+            cur = _value(editor).strip()
+            if cur.lower() == want:
+                send_keys("{ENTER}")
+                return True
+            if cur == last:             # reached bottom without a match
+                break
+            last = cur
+            send_keys("{DOWN}")
+            time.sleep(0.02)
+        return False
+
     def add_font_type(self, strategy: str = "open-type") -> bool:
         """Add the 'Font type' user-defined property via the 'More...' row."""
         return self.set_row_value("More...", "Font type", strategy)
 
-    def set_font_type(self, value: str = "EasyType-L=10MM", strategy: str = "open-type") -> bool:
-        """Set the 'Font type' value (defaults to Iso) to `value`."""
+    def set_font_type(self, value: str = "EasyType-L=10mm", strategy: str = "cycle") -> bool:
+        """Set the 'Font type' value (defaults to Iso) to `value`.
+
+        Default strategy 'cycle' arrows to the exact item using the read-back
+        oracle; other strategies are typed incremental search (less reliable
+        when several items share a prefix).
+        """
+        if strategy == "cycle":
+            return self._set_row_by_cycle("Font type", value)
         return self.set_row_value("Font type", value, strategy)
 
     def read_editor_value(self, row_name: str) -> str:
@@ -323,12 +391,29 @@ def main() -> int:
     parser.add_argument("--add-and-set-font", metavar="VALUE", default=None,
                         help="Add the 'Font type' property, then set it to VALUE. "
                              "Mutates the open part.")
-    parser.add_argument("--strategy", default="open-type",
-                        choices=["open-type", "open-prefix", "type-enter"],
+    parser.add_argument("--strategy", default="cycle",
+                        choices=["cycle", "open-type", "open-prefix", "type-enter"],
                         help="How to drive the owner-drawn value dropdown "
-                             "(default: open-type).")
+                             "(default: cycle).")
+    parser.add_argument("--list-fonts", action="store_true",
+                        help="Enumerate and print the Font type options (reveals "
+                             "exact names). Changes selection -- don't save after.")
     args = parser.parse_args()
 
+    if args.list_fonts:
+        try:
+            boost = BoostUIA()
+        except ImportError:
+            print("pywinauto not installed. Run: pip install --user pywinauto")
+            return 2
+        if not boost.has_design():
+            print("Open a part in Design view with the Font type row present first.")
+            return 1
+        vals = boost.enumerate_row_values("Font type")
+        print(f"Font type options ({len(vals)}):")
+        for v in vals:
+            print(f"  - {v!r}")
+        return 0
     if args.set_font is not None:
         return _do_font_test(add=False, value=args.set_font, strategy=args.strategy)
     if args.add_and_set_font is not None:
