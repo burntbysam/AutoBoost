@@ -344,7 +344,7 @@ class BoostUIA:
     # if the shop's font table changes.
     FONT_OPTIONS = [
         "Iso", "Iso Prop", "Bold",
-        "EasyType-L=4mm", "EasyType-L=5mm", "EasyType-L=8mm",
+        "EasyType-L=4mm", "EasyType-L=5mm", "EasyType-L=6mm", "EasyType-L=8mm",
         "EasyType-L=8.5mm", "EasyType-L=10mm", "Digital Font-H=3mm",
     ]
 
