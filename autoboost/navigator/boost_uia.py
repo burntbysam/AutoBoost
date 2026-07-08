@@ -396,6 +396,9 @@ class BoostUIA:
         cy = int(y + (idx + 0.5) * row_h)
 
         if dry_run:
+            # Save the raw after-frame too, so if the dropdown wasn't open we can
+            # see that rather than guessing.
+            cv2.imwrite("font_dropdown_raw.png", cv2.cvtColor(after_rgb, cv2.COLOR_RGB2BGR))
             dbg = cv2.cvtColor(after_rgb, cv2.COLOR_RGB2BGR)
             cv2.rectangle(dbg, (x, y), (x + w, y + h), (0, 200, 0), 2)
             for i in range(len(options) + 1):     # row separators
@@ -412,6 +415,43 @@ class BoostUIA:
         val = self.read_editor_value("Font type")
         self.last_value = val
         return val.strip().lower() == target.strip().lower()
+
+    def _read_font_value(self) -> str:
+        edit = self._grid_controls()["edit"]
+        return _value(edit).strip() if edit is not None else ""
+
+    def set_font_by_cycle_click(self, target: str = "EasyType-L=10mm",
+                                max_clicks: int = 16) -> bool:
+        """Advance the Font type value by double-clicking the row, reading back
+        after each click, stopping when it equals `target`.
+
+        Relies on the common PropertyGrid behavior where double-clicking an
+        enum/combo row steps to the next value. No dropdown or vision needed.
+        Records the last value seen in self.last_value.
+        """
+        import time
+        row = self._grid_controls()["buttons"].get("Font type")
+        if row is None:
+            self.last_value = ""
+            return False
+        row.click_input()          # select the row
+        time.sleep(0.2)
+        want = target.strip().lower()
+        seen = set()
+        for _ in range(max_clicks):
+            cur = self._read_font_value()
+            self.last_value = cur
+            if cur.lower() == want:
+                return True
+            if cur.lower() in seen:   # value repeated -> not cycling / wrapped
+                break
+            seen.add(cur.lower())
+            try:
+                row.double_click_input()
+            except Exception:
+                break
+            time.sleep(0.15)
+        return self.last_value.strip().lower() == want
 
     def read_editor_value(self, row_name: str) -> str:
         """Read back a row's current committed value (selects the row first)."""
@@ -527,7 +567,27 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="With --set-font-pos: mark the intended click on a "
                              "saved overlay and click nothing.")
+    parser.add_argument("--set-font-dblclick", action="store_true",
+                        help="Set Font type by double-clicking the row to advance "
+                             "it to --target (no dropdown/vision).")
     args = parser.parse_args()
+
+    if args.set_font_dblclick:
+        try:
+            boost = BoostUIA()
+        except ImportError:
+            print("pywinauto not installed. Run: pip install --user pywinauto")
+            return 2
+        if not boost.has_design():
+            print("Open a part in Design view with the Font type row present first.")
+            return 1
+        import time
+        print(f"Double-click-cycling Font type -> {args.target!r} ...")
+        t0 = time.time()
+        ok = boost.set_font_by_cycle_click(args.target)
+        print(f"  result -> {ok}   (last value: {boost.last_value!r}, {time.time()-t0:.1f}s)")
+        print("  Tell me what Boost shows and whether the value changed at all.")
+        return 0 if ok else 2
 
     if args.set_font_pos:
         try:
