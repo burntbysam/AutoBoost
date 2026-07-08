@@ -70,11 +70,12 @@ class BoostUIA:
         from pywinauto.timings import Timings
         # The WinForms-UIA bridge is slow; don't let a missing control burn the
         # full default find timeout (5s) on every lookup.
-        Timings.window_find_timeout = 2
+        Timings.window_find_timeout = 1
         self.desktop = Desktop(backend="uia")
         self._home = None
         self._design = None
         self._grid = None
+        self._table = None
         self.last_value = ""   # last value observed by a set operation (for tests)
 
     # -- window handles -----------------------------------------------------
@@ -82,7 +83,7 @@ class BoostUIA:
     # which is the main source of slowness. Call reset() if windows change.
 
     def reset(self) -> None:
-        self._home = self._design = self._grid = None
+        self._home = self._design = self._grid = self._table = None
 
     def home(self):
         if self._home is None:
@@ -195,13 +196,22 @@ class BoostUIA:
     _EDITOR_AUTOID = "9765996"     # the WinForms EDIT holding the value
     _OPEN_AUTOID = "4261530"       # its dropdown 'Open' arrow
 
+    def _grid_table(self):
+        """Cached wrapper for the property grid's Table (rows/editor/arrow are
+        its DIRECT children, so a shallow children() scan is fast)."""
+        if self._table is None:
+            self._table = self._property_grid().child_window(
+                control_type="Table").wrapper_object()
+        return self._table
+
     def _grid_controls(self) -> dict:
-        """One descendants() sweep -> {'buttons': {name: wrapper}, 'edit', 'open'}.
+        """Shallow children() scan -> {'buttons': {name: wrapper}, 'edit',
+        'open', 'opens': [all Open arrows]}.
 
         Identify the in-place editor by control type (Edit) and the dropdown
-        arrow by its name ('Open'). The numeric auto-ids from the probe dumps
-        are DotNetBar runtime ids that change between Boost sessions, so we must
-        NOT depend on them.
+        arrow by its name ('Open'). Numeric auto-ids from the probe dumps are
+        DotNetBar runtime ids that change between sessions -- never depend on
+        them. Uses the Table's direct children (fast) instead of descendants().
         """
         def ctype(c):
             try:
@@ -209,21 +219,19 @@ class BoostUIA:
             except Exception:
                 return ""
 
-        grid = self._property_grid().wrapper_object()
-        buttons, edit, openbtn = {}, None, None
-        for c in grid.descendants():
+        buttons, edit, opens = {}, None, []
+        for c in self._grid_table().children():
             ct = ctype(c)
-            if ct == "Edit" or _auto_id(c) == self._EDITOR_AUTOID:
-                if edit is None:
-                    edit = c
+            if ct == "Edit" and edit is None:
+                edit = c
             elif ct == "Button":
                 name = _text(c)
-                if name:
+                if name == "Open":
+                    opens.append(c)
+                elif name:
                     buttons.setdefault(name, c)
-                if _auto_id(c) == self._OPEN_AUTOID and openbtn is None:
-                    openbtn = c
-        openbtn = openbtn or buttons.get("Open")
-        return {"buttons": buttons, "edit": edit, "open": openbtn}
+        return {"buttons": buttons, "edit": edit,
+                "open": (opens[0] if opens else None), "opens": opens}
 
     def property_rows(self) -> list[str]:
         """Names of the rows currently in the Design property grid."""
@@ -569,6 +577,66 @@ class BoostUIA:
             time.sleep(0.15)
         return self.last_value.strip().lower() == want
 
+    def add_font_type(self) -> bool:
+        """Add the 'Font type' user-defined property to the selected text.
+
+        Recipe (from observed behavior): click 'More...' -> click the arrow that
+        appears on that row -> a selector box appears (another arrow + Add +
+        Delete) -> click that arrow -> 'Font type' is the only 'F' option, so F
+        selects it, Enter commits -> Tab to the Add button -> Enter.
+        Records the outcome in self.last_value.
+        """
+        import time
+        from pywinauto.keyboard import send_keys
+
+        def rect(w):
+            try:
+                r = w.rectangle()
+                return (r.left, r.top, r.right, r.bottom)
+            except Exception:
+                return None
+
+        c = self._grid_controls()
+        more = c["buttons"].get("More...")
+        if more is None:
+            self.last_value = "<More... row not found>"
+            return False
+        more.click_input()
+        time.sleep(0.3)
+
+        c = self._grid_controls()
+        if not c["opens"]:
+            self.last_value = "<More... dropdown arrow not found>"
+            return False
+        arrow_more = c["opens"][0]
+        r_more = rect(arrow_more)
+        arrow_more.click_input()          # opens the property selector box
+        time.sleep(0.4)
+
+        # The selector box has its own dropdown arrow (a different 'Open' from
+        # the More... row's). Click it so the property list is focused/open.
+        c = self._grid_controls()
+        sel_arrow = next((o for o in c["opens"] if rect(o) != r_more), None)
+        sel_arrow = sel_arrow or (c["opens"][0] if c["opens"] else None)
+        if sel_arrow is not None:
+            sel_arrow.click_input()
+            time.sleep(0.3)
+
+        # 'Font type' is the only option starting with F -> F selects, Enter
+        # commits; Tab moves to the Add button, Enter activates it.
+        send_keys("f")
+        time.sleep(0.15)
+        send_keys("{ENTER}")
+        time.sleep(0.3)
+        send_keys("{TAB}")
+        time.sleep(0.1)
+        send_keys("{ENTER}")
+        time.sleep(0.4)
+
+        present = "Font type" in self._grid_controls()["buttons"]
+        self.last_value = "Font type row present" if present else "<add may have failed>"
+        return present
+
     def read_editor_value(self, row_name: str) -> str:
         """Read back a row's current committed value (selects the row first)."""
         import time
@@ -690,7 +758,27 @@ def main() -> int:
                         help="Set Font type via held mouse-drag on the open "
                              "dropdown (the only gesture the control honours). "
                              "Add --dry-run to just mark the target row.")
+    parser.add_argument("--add-font", action="store_true",
+                        help="Add the 'Font type' user-defined property (More... "
+                             "-> Font type -> Add). Run on a text with no Font "
+                             "type row yet.")
     args = parser.parse_args()
+
+    if args.add_font:
+        try:
+            boost = BoostUIA()
+        except ImportError:
+            print("pywinauto not installed. Run: pip install --user pywinauto")
+            return 2
+        if not boost.has_design():
+            print("Open a part in Design view with the part-number text selected first.")
+            return 1
+        import time
+        print("Adding 'Font type' property ...")
+        t0 = time.time()
+        ok = boost.add_font_type()
+        print(f"  result -> {ok}   {boost.last_value!r}   ({time.time()-t0:.1f}s)")
+        return 0 if ok else 2
 
     if args.set_font_drag:
         try:
