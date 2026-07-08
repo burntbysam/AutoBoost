@@ -187,44 +187,59 @@ class BoostUIA:
         except Exception:
             return None
 
-    def type_value(self, row_name: str, value: str) -> bool:
-        """Select `row_name` and set its value to `value` via keyboard.
+    def _open_value_dropdown(self) -> bool:
+        """Click the in-place 'Open' arrow to expand the owner-drawn list."""
+        for locator in (
+            lambda: self._property_grid().child_window(auto_id=self._OPEN_AUTOID),
+            lambda: self._property_grid().child_window(title="Open", control_type="Button"),
+        ):
+            try:
+                locator().click_input()
+                return True
+            except Exception:
+                continue
+        return False
 
-        Used for both adding a user-defined property ('More...' -> 'Font type')
-        and setting a value ('Font type' -> 'EasyType-L=10MM'), since both use
-        the same owner-drawn dropdown that only responds to typing/selection.
+    def set_row_value(self, row_name: str, value: str, strategy: str = "open-type") -> bool:
+        """Set a property row's value. The dropdown is owner-drawn, so we open
+        it and use the combo's incremental keyboard search to land on the item.
+
+        strategies (for tuning against the real control):
+          open-type   : open dropdown, type the full value, Enter   (default)
+          open-prefix : open dropdown, type only the leading token
+                        (e.g. 'EasyType'), Enter -- for combos whose incremental
+                        search chokes on '-' or '=' characters
+          type-enter  : don't open; type the value into the editor, Enter
+                        (this is the one that did NOT commit for Font type)
         """
+        import re
+        import time
         from pywinauto.keyboard import send_keys
-        editor = self._select_row_editor(row_name)
-        if editor is None:
+
+        if self._select_row_editor(row_name) is None:
             return False
+        time.sleep(0.4)
+        if strategy.startswith("open"):
+            self._open_value_dropdown()
+            time.sleep(0.5)
+
+        to_type = value
+        if strategy == "open-prefix":
+            to_type = re.split(r"[-=]", value)[0]  # 'EasyType-L=10MM' -> 'EasyType'
         try:
-            editor.set_focus()
-        except Exception:
-            pass
-        # Clear anything present, type the exact value, commit with Enter.
-        # value is escaped so characters like -, =, digits are sent literally.
-        try:
-            send_keys("^a{DEL}")
-            send_keys(value, with_spaces=True, pause=0.02)
+            send_keys(to_type, with_spaces=True, pause=0.05)
             send_keys("{ENTER}")
             return True
         except Exception:
-            # Fallback: ValuePattern SetValue (may not always commit).
-            try:
-                editor.set_edit_text(value)
-                send_keys("{ENTER}")
-                return True
-            except Exception:
-                return False
+            return False
 
-    def add_font_type(self) -> bool:
+    def add_font_type(self, strategy: str = "open-type") -> bool:
         """Add the 'Font type' user-defined property via the 'More...' row."""
-        return self.type_value("More...", "Font type")
+        return self.set_row_value("More...", "Font type", strategy)
 
-    def set_font_type(self, value: str = "EasyType-L=10MM") -> bool:
+    def set_font_type(self, value: str = "EasyType-L=10MM", strategy: str = "open-type") -> bool:
         """Set the 'Font type' value (defaults to Iso) to `value`."""
-        return self.type_value("Font type", value)
+        return self.set_row_value("Font type", value, strategy)
 
     def read_editor_value(self, row_name: str) -> str:
         """Select a row and read back its in-place editor value (for verifying)."""
@@ -271,8 +286,9 @@ def _selftest() -> int:
     return 0
 
 
-def _do_font_test(add: bool, value: str) -> int:
+def _do_font_test(add: bool, value: str, strategy: str) -> int:
     """Observable font-chain test. Mutates the open part -- do NOT save after."""
+    import time
     try:
         boost = BoostUIA()
     except ImportError:
@@ -282,16 +298,15 @@ def _do_font_test(add: bool, value: str) -> int:
         print("Open a part in Design view with the part-number text selected first.")
         return 1
 
-    print("NOTE: this changes the open part. Undo (Ctrl+Z) / don't save to revert.\n")
+    print(f"NOTE: this changes the open part. Undo (Ctrl+Z) / don't save to revert.")
+    print(f"strategy = {strategy!r}\n")
     if add:
         print("Adding 'Font type' property via 'More...' ...")
-        print(f"  add_font_type -> {boost.add_font_type()}")
-        import time
+        print(f"  add_font_type -> {boost.add_font_type(strategy)}")
         time.sleep(1.0)
     print(f"Setting Font type -> {value!r} ...")
-    ok = boost.set_font_type(value)
+    ok = boost.set_font_type(value, strategy)
     print(f"  set_font_type -> {ok}")
-    import time
     time.sleep(0.8)
     print(f"\nRead back Font type value: {boost.read_editor_value('Font type')!r}")
     print("Compare against what Boost shows on screen and tell me if it took.")
@@ -308,12 +323,16 @@ def main() -> int:
     parser.add_argument("--add-and-set-font", metavar="VALUE", default=None,
                         help="Add the 'Font type' property, then set it to VALUE. "
                              "Mutates the open part.")
+    parser.add_argument("--strategy", default="open-type",
+                        choices=["open-type", "open-prefix", "type-enter"],
+                        help="How to drive the owner-drawn value dropdown "
+                             "(default: open-type).")
     args = parser.parse_args()
 
     if args.set_font is not None:
-        return _do_font_test(add=False, value=args.set_font)
+        return _do_font_test(add=False, value=args.set_font, strategy=args.strategy)
     if args.add_and_set_font is not None:
-        return _do_font_test(add=True, value=args.add_and_set_font)
+        return _do_font_test(add=True, value=args.add_and_set_font, strategy=args.strategy)
     return _selftest()
 
 
