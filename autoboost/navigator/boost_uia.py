@@ -420,6 +420,109 @@ class BoostUIA:
         edit = self._grid_controls()["edit"]
         return _value(edit).strip() if edit is not None else ""
 
+    def _font_arrow_center(self):
+        """Select the Font type row and return the (x,y) centre of its dropdown
+        'Open' arrow in screen coords (or (None,None))."""
+        import time
+        row = self._grid_controls()["buttons"].get("Font type")
+        if row is None:
+            return None, None
+        row.click_input()
+        time.sleep(0.25)
+        ob = self._grid_controls()["open"]
+        if ob is None:
+            return None, None
+        r = ob.rectangle()
+        return (r.left + r.right) // 2, (r.top + r.bottom) // 2
+
+    def set_font_by_drag(self, target: str = "EasyType-L=10mm",
+                         options: list[str] | None = None,
+                         dry_run: bool = False,
+                         out_path: str = "font_dropdown.png",
+                         retries: int = 2) -> bool:
+        """Select the font with a held mouse-drag -- the only gesture the
+        control honours (per the observed commit-on-index-change bug).
+
+        Press-and-hold on the dropdown arrow (opens the list and holds it open,
+        so the screenshot reliably catches it), diff before/after to find the
+        list box, drag down to the target row, release to commit. Verifies with
+        the read-back oracle and retries with a corrected offset if it misses.
+        dry_run marks the target row on an overlay and releases without moving
+        (no commit).
+        """
+        import time
+        import numpy as np
+        import cv2
+        import pyautogui
+        from pywinauto.keyboard import send_keys
+
+        options = options or self.FONT_OPTIONS
+        if target not in options:
+            self.last_value = f"<target {target!r} not in options>"
+            return False
+        idx = options.index(target)
+
+        ax, ay = self._font_arrow_center()
+        if ax is None:
+            self.last_value = "<Font type row / open arrow not found>"
+            return False
+
+        def gray_shot():
+            return cv2.cvtColor(np.array(pyautogui.screenshot()), cv2.COLOR_RGB2GRAY)
+
+        for attempt in range(retries + 1):
+            before = gray_shot()
+            pyautogui.mouseDown(ax, ay)          # press arrow: opens + holds open
+            time.sleep(0.4)
+            after_rgb = np.array(pyautogui.screenshot())
+            after = cv2.cvtColor(after_rgb, cv2.COLOR_RGB2GRAY)
+
+            diff = cv2.absdiff(before, after)
+            _, th = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+            th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+            contours, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours:
+                pyautogui.mouseUp()
+                send_keys("{ESC}")
+                self.last_value = "<dropdown not detected even while held>"
+                return False
+            x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
+            row_h = h / len(options)
+            tx = x + w // 2
+            ty = int(y + (idx + 0.5) * row_h)
+
+            if dry_run:
+                cv2.imwrite("font_dropdown_raw.png",
+                            cv2.cvtColor(after_rgb, cv2.COLOR_RGB2BGR))
+                dbg = cv2.cvtColor(after_rgb, cv2.COLOR_RGB2BGR)
+                cv2.rectangle(dbg, (x, y), (x + w, y + h), (0, 200, 0), 2)
+                for i in range(len(options) + 1):
+                    yy = int(y + i * row_h)
+                    cv2.line(dbg, (x, yy), (x + w, yy), (0, 150, 0), 1)
+                cv2.circle(dbg, (tx, ty), 6, (0, 0, 255), -1)
+                cv2.imwrite(out_path, dbg)
+                pyautogui.moveTo(ax, ay)          # release on the arrow: no commit
+                pyautogui.mouseUp()
+                send_keys("{ESC}")
+                self.last_value = f"<dry-run: box=({x},{y},{w},{h}) target row {idx} at ({tx},{ty})>"
+                return True
+
+            pyautogui.moveTo(tx, ty, duration=0.35)   # drag highlight to target
+            time.sleep(0.15)
+            pyautogui.mouseUp()                        # release -> commit
+            time.sleep(0.3)
+            val = self.read_editor_value("Font type")
+            self.last_value = val
+            if val.strip().lower() == target.strip().lower():
+                return True
+            # Missed: if we can tell which row we hit, correct the row height.
+            if val in options:
+                hit = options.index(val)
+                if hit != idx and abs(hit - idx) >= 1:
+                    row_h = (ty - (y + 0.5 * (h / len(options)))) / max(1, (hit - 0))
+            # otherwise loop and retry with the same geometry
+        return False
+
     def set_font_by_cycle_click(self, target: str = "EasyType-L=10mm",
                                 max_clicks: int = 16) -> bool:
         """Advance the Font type value by double-clicking the row, reading back
@@ -570,7 +673,32 @@ def main() -> int:
     parser.add_argument("--set-font-dblclick", action="store_true",
                         help="Set Font type by double-clicking the row to advance "
                              "it to --target (no dropdown/vision).")
+    parser.add_argument("--set-font-drag", action="store_true",
+                        help="Set Font type via held mouse-drag on the open "
+                             "dropdown (the only gesture the control honours). "
+                             "Add --dry-run to just mark the target row.")
     args = parser.parse_args()
+
+    if args.set_font_drag:
+        try:
+            boost = BoostUIA()
+        except ImportError:
+            print("pywinauto not installed. Run: pip install --user pywinauto")
+            return 2
+        if not boost.has_design():
+            print("Open a part in Design view with the Font type row present first.")
+            return 1
+        import time
+        mode = "DRY-RUN (no commit)" if args.dry_run else "LIVE (will commit)"
+        print(f"{mode}: selecting {args.target!r} by drag ...")
+        t0 = time.time()
+        ok = boost.set_font_by_drag(args.target, dry_run=args.dry_run)
+        print(f"  result -> {ok}   {boost.last_value!r}   ({time.time()-t0:.1f}s)")
+        if args.dry_run:
+            print("  Open font_dropdown.png: the red dot should sit on the "
+                  "EasyType-L=10mm row. Also font_dropdown_raw.png is the plain "
+                  "frame (confirms the list stayed open). Send me font_dropdown.png.")
+        return 0 if ok else 2
 
     if args.set_font_dblclick:
         try:
