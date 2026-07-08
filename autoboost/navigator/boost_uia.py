@@ -47,11 +47,10 @@ def _auto_id(wrapper) -> str:
 
 
 def _value(wrapper) -> str:
-    """Best-effort read of an Edit/value control across pywinauto versions."""
+    """Fast best-effort read of an Edit/value control's current value."""
     for attempt in (
         lambda: wrapper.get_value(),
         lambda: wrapper.iface_value.CurrentValue,
-        lambda: wrapper.legacy_properties().get("Value"),
         lambda: wrapper.window_text(),
     ):
         try:
@@ -68,10 +67,15 @@ class BoostUIA:
 
     def __init__(self):
         from pywinauto import Desktop  # imported here so import errors are clear
+        from pywinauto.timings import Timings
+        # The WinForms-UIA bridge is slow; don't let a missing control burn the
+        # full default find timeout (5s) on every lookup.
+        Timings.window_find_timeout = 2
         self.desktop = Desktop(backend="uia")
         self._home = None
         self._design = None
         self._grid = None
+        self.last_value = ""   # last value observed by a set operation (for tests)
 
     # -- window handles -----------------------------------------------------
     # Window/grid specs are cached: resolving them re-searches the UIA tree,
@@ -177,159 +181,107 @@ class BoostUIA:
             return False
 
     # -- Design: font chain (keyboard-driven; the value list is owner-drawn) --
+    #
+    # The value combo does single-letter select-and-close: one keystroke jumps
+    # to the FIRST item starting with that letter and closes the list. So we
+    # can't type the full value. Instead we press the first letter repeatedly to
+    # cycle through the matching items (EasyType-L=4mm -> 5mm -> 8mm -> 8.5mm ->
+    # 10mm) and stop when the read-back value equals the target.
+    #
+    # All the controls are fetched with a single descendants() call and filtered
+    # in Python -- repeated child_window() lookups against the WinForms-UIA
+    # bridge were what made this take a minute.
 
-    # When a value row is selected, an in-place editor appears with these ids.
     _EDITOR_AUTOID = "9765996"     # the WinForms EDIT holding the value
     _OPEN_AUTOID = "4261530"       # its dropdown 'Open' arrow
 
-    def _select_row_editor(self, row_name: str, timeout: float = 2.0):
-        """Select a property row and return its in-place EDIT wrapper (or None).
+    def _grid_controls(self) -> dict:
+        """One descendants() sweep -> {'buttons': {name: wrapper}, 'edit', 'open'}."""
+        grid = self._property_grid().wrapper_object()
+        buttons, edit, openbtn = {}, None, None
+        for c in grid.descendants():
+            aid = _auto_id(c)
+            if aid == self._EDITOR_AUTOID:
+                edit = c
+            elif aid == self._OPEN_AUTOID:
+                openbtn = c
+            else:
+                name = _text(c)
+                if name and c.element_info.control_type == "Button":
+                    buttons.setdefault(name, c)
+        return {"buttons": buttons, "edit": edit, "open": openbtn}
 
-        The value dropdown is owner-drawn (invisible to UIA), so we do not touch
-        the list -- we type into this editor instead.
-        """
-        import time
+    def property_rows(self) -> list[str]:
+        """Names of the rows currently in the Design property grid."""
         try:
-            self._property_grid().child_window(
-                title=row_name, control_type="Button").click_input()
+            return list(self._grid_controls()["buttons"].keys())
         except Exception:
-            return None
-        edit = self._property_grid().child_window(auto_id=self._EDITOR_AUTOID)
+            return []
+
+    def click_property(self, name: str) -> bool:
+        """Click a named row/button in the property grid (e.g. 'More...')."""
         try:
-            edit.wait("exists ready", timeout=timeout)
-            return edit.wrapper_object()
-        except Exception:
-            return None
-
-    def _open_value_dropdown(self) -> bool:
-        """Click the in-place 'Open' arrow to expand the owner-drawn list."""
-        for locator in (
-            lambda: self._property_grid().child_window(auto_id=self._OPEN_AUTOID),
-            lambda: self._property_grid().child_window(title="Open", control_type="Button"),
-        ):
-            try:
-                locator().click_input()
-                return True
-            except Exception:
-                continue
-        return False
-
-    def set_row_value(self, row_name: str, value: str, strategy: str = "open-type") -> bool:
-        """Set a property row's value. The dropdown is owner-drawn, so we open
-        it and use the combo's incremental keyboard search to land on the item.
-
-        strategies (for tuning against the real control):
-          open-type   : open dropdown, type the full value, Enter   (default)
-          open-prefix : open dropdown, type only the leading token
-                        (e.g. 'EasyType'), Enter -- for combos whose incremental
-                        search chokes on '-' or '=' characters
-          type-enter  : don't open; type the value into the editor, Enter
-                        (this is the one that did NOT commit for Font type)
-        """
-        import re
-        import time
-        from pywinauto.keyboard import send_keys
-
-        if self._select_row_editor(row_name) is None:
-            return False
-        time.sleep(0.4)
-        if strategy.startswith("open"):
-            self._open_value_dropdown()
-            time.sleep(0.5)
-
-        to_type = value
-        if strategy == "open-prefix":
-            to_type = re.split(r"[-=]", value)[0]  # 'EasyType-L=10mm' -> 'EasyType'
-        try:
-            # pause=0: send the whole string in one burst so the combo's
-            # incremental-search buffer doesn't reset between characters
-            # (a per-key delay made it stop at 'EasyType-L=' -> the 4mm item).
-            send_keys(to_type, with_spaces=True, pause=0.0)
-            send_keys("{ENTER}")
+            btn = self._grid_controls()["buttons"].get(name)
+            if btn is None:
+                return False
+            btn.click_input()
             return True
         except Exception:
             return False
 
-    def enumerate_row_values(self, row_name: str, limit: int = 200) -> list[str]:
-        """Return the selectable values of a row's combo, top to bottom.
+    def set_font_type(self, value: str = "EasyType-L=10mm", max_presses: int = 30) -> bool:
+        """Set 'Font type' to `value` by cycling the first letter with oracle.
 
-        Uses the in-place editor as a live oracle: go to the top with Up, then
-        press Down reading the value each step until it stops changing (bottom).
-        Reveals the owner-drawn list's exact item text.
+        Records the final committed value in self.last_value.
         """
         import time
         from pywinauto.keyboard import send_keys
-        editor = self._select_row_editor(row_name)
-        if editor is None:
-            return []
-        try:
-            editor.set_focus()
-        except Exception:
-            pass
-        for _ in range(limit):          # climb to the first item
-            send_keys("{UP}")
-        values, last = [], None
-        for _ in range(limit):
-            cur = _value(editor).strip()
-            if cur == last:             # value stopped changing -> bottom
-                break
-            values.append(cur)
-            last = cur
-            send_keys("{DOWN}")
-            time.sleep(0.02)
-        return values
 
-    def _set_row_by_cycle(self, row_name: str, target: str, limit: int = 200) -> bool:
-        """Select a value by arrowing to it, using the read-back as an oracle.
-
-        Robust against similar-prefixed items (EasyType-L=4mm vs =10mm) because
-        it matches the whole committed value rather than relying on incremental
-        typed search.
-        """
-        import time
-        from pywinauto.keyboard import send_keys
-        editor = self._select_row_editor(row_name)
-        if editor is None:
+        ctrls = self._grid_controls()
+        row = ctrls["buttons"].get("Font type")
+        if row is None:
+            self.last_value = ""
             return False
-        try:
-            editor.set_focus()
-        except Exception:
-            pass
-        want = target.strip().lower()
-        for _ in range(limit):          # climb to the top first
-            send_keys("{UP}")
-        last = None
-        for _ in range(limit):
+        row.click_input()          # select row -> in-place editor appears
+        time.sleep(0.25)
+
+        ctrls = self._grid_controls()   # re-fetch to get the editor + open arrow
+        editor = ctrls["edit"]
+        if editor is None:
+            self.last_value = ""
+            return False
+        if ctrls["open"] is not None:   # open the list so the combo has focus
+            try:
+                ctrls["open"].click_input()
+                time.sleep(0.2)
+            except Exception:
+                pass
+
+        want = value.strip().lower()
+        letter = value[0]
+        seen = set()
+        for _ in range(max_presses):
+            send_keys(letter)          # advance to next item starting with letter
+            time.sleep(0.1)
             cur = _value(editor).strip()
+            self.last_value = cur
             if cur.lower() == want:
-                send_keys("{ENTER}")
                 return True
-            if cur == last:             # reached bottom without a match
+            if cur.lower() in seen:    # cycled all the way around -> not present
                 break
-            last = cur
-            send_keys("{DOWN}")
-            time.sleep(0.02)
+            seen.add(cur.lower())
         return False
 
-    def add_font_type(self, strategy: str = "open-type") -> bool:
-        """Add the 'Font type' user-defined property via the 'More...' row."""
-        return self.set_row_value("More...", "Font type", strategy)
-
-    def set_font_type(self, value: str = "EasyType-L=10mm", strategy: str = "open-type") -> bool:
-        """Set the 'Font type' value (defaults to Iso) to `value`.
-
-        Default 'open-type' opens the dropdown and types the full value in one
-        burst (fast + reliable when the buffer doesn't reset). 'cycle' is kept
-        for controls that ignore typed search but respond to arrows.
-        """
-        if strategy == "cycle":
-            return self._set_row_by_cycle("Font type", value)
-        return self.set_row_value("Font type", value, strategy)
-
     def read_editor_value(self, row_name: str) -> str:
-        """Select a row and read back its in-place editor value (for verifying)."""
-        editor = self._select_row_editor(row_name)
-        return _value(editor) if editor is not None else ""
+        """Read back a row's current committed value (selects the row first)."""
+        import time
+        row = self._grid_controls()["buttons"].get(row_name)
+        if row is None:
+            return ""
+        row.click_input()
+        time.sleep(0.2)
+        edit = self._grid_controls()["edit"]
+        return _value(edit) if edit is not None else ""
 
     # -- Design: ribbon -----------------------------------------------------
 
@@ -371,8 +323,8 @@ def _selftest() -> int:
     return 0
 
 
-def _do_font_test(add: bool, value: str, strategy: str) -> int:
-    """Observable font-chain test. Mutates the open part -- do NOT save after."""
+def _do_font_test(value: str) -> int:
+    """Observable font test. Mutates the open part -- do NOT save after."""
     import time
     try:
         boost = BoostUIA()
@@ -383,17 +335,12 @@ def _do_font_test(add: bool, value: str, strategy: str) -> int:
         print("Open a part in Design view with the part-number text selected first.")
         return 1
 
-    print(f"NOTE: this changes the open part. Undo (Ctrl+Z) / don't save to revert.")
-    print(f"strategy = {strategy!r}\n")
-    if add:
-        print("Adding 'Font type' property via 'More...' ...")
-        print(f"  add_font_type -> {boost.add_font_type(strategy)}")
-        time.sleep(1.0)
-    print(f"Setting Font type -> {value!r} ...")
-    ok = boost.set_font_type(value, strategy)
-    print(f"  set_font_type -> {ok}")
-    time.sleep(0.8)
-    print(f"\nRead back Font type value: {boost.read_editor_value('Font type')!r}")
+    print("NOTE: this changes the open part. Undo (Ctrl+Z) / don't save to revert.\n")
+    print(f"Setting Font type -> {value!r} (letter-cycle) ...")
+    t0 = time.time()
+    ok = boost.set_font_type(value)
+    dt = time.time() - t0
+    print(f"  set_font_type -> {ok}   (last value seen: {boost.last_value!r}, {dt:.1f}s)")
     print("Compare against what Boost shows on screen and tell me if it took.")
     return 0 if ok else 2
 
@@ -403,38 +350,12 @@ def main() -> int:
     parser.add_argument("--selftest", action="store_true",
                         help="Read-only connectivity + control check (default).")
     parser.add_argument("--set-font", metavar="VALUE", default=None,
-                        help="Set the existing 'Font type' row to VALUE "
-                             "(e.g. 'EasyType-L=10MM'). Mutates the open part.")
-    parser.add_argument("--add-and-set-font", metavar="VALUE", default=None,
-                        help="Add the 'Font type' property, then set it to VALUE. "
-                             "Mutates the open part.")
-    parser.add_argument("--strategy", default="open-type",
-                        choices=["open-type", "open-prefix", "cycle", "type-enter"],
-                        help="How to drive the owner-drawn value dropdown "
-                             "(default: open-type).")
-    parser.add_argument("--list-fonts", action="store_true",
-                        help="Enumerate and print the Font type options (reveals "
-                             "exact names). Changes selection -- don't save after.")
+                        help="Set the 'Font type' row to VALUE by letter-cycle "
+                             "(e.g. 'EasyType-L=10mm'). Mutates the open part.")
     args = parser.parse_args()
 
-    if args.list_fonts:
-        try:
-            boost = BoostUIA()
-        except ImportError:
-            print("pywinauto not installed. Run: pip install --user pywinauto")
-            return 2
-        if not boost.has_design():
-            print("Open a part in Design view with the Font type row present first.")
-            return 1
-        vals = boost.enumerate_row_values("Font type")
-        print(f"Font type options ({len(vals)}):")
-        for v in vals:
-            print(f"  - {v!r}")
-        return 0
     if args.set_font is not None:
-        return _do_font_test(add=False, value=args.set_font, strategy=args.strategy)
-    if args.add_and_set_font is not None:
-        return _do_font_test(add=True, value=args.add_and_set_font, strategy=args.strategy)
+        return _do_font_test(value=args.set_font)
     return _selftest()
 
 
