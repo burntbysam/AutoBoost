@@ -44,13 +44,14 @@ def _canvas_rect(boost) -> tuple[int, int, int, int]:
 def process_open_part(target_font: str = "EasyType-L=10mm",
                       do_save: bool = False,
                       do_close: bool = False,
-                      log=print) -> bool:
+                      log=print,
+                      boost: BoostUIA | None = None) -> bool:
     import pyautogui
     from .vision.placement import find_safe_placement
     from .vision.verify import verify_placement
 
     t = DEFAULT.timing
-    boost = BoostUIA()
+    boost = boost or BoostUIA()
     if not boost.has_design():
         log("No Design window open. Open a part in Design view first.")
         return False
