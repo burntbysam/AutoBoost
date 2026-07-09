@@ -76,6 +76,7 @@ class BoostUIA:
         self._design = None
         self._grid = None
         self._table = None
+        self._options = None
         self.last_value = ""   # last value observed by a set operation (for tests)
 
     # -- window handles -----------------------------------------------------
@@ -83,7 +84,7 @@ class BoostUIA:
     # which is the main source of slowness. Call reset() if windows change.
 
     def reset(self) -> None:
-        self._home = self._design = self._grid = self._table = None
+        self._home = self._design = self._grid = self._table = self._options = None
 
     def home(self):
         if self._home is None:
@@ -203,6 +204,15 @@ class BoostUIA:
             self._table = self._property_grid().child_window(
                 control_type="Table").wrapper_object()
         return self._table
+
+    def _options_panel(self):
+        """Cached wrapper for the Design 'Options' side panel. The add-property
+        selector box lives here (a sibling of the grid), so it is not visible in
+        the grid Table's children -- scan this panel's descendants for it."""
+        if self._options is None:
+            self._options = self.design().child_window(
+                auto_id="toolOptionsSideBar").wrapper_object()
+        return self._options
 
     def _grid_controls(self) -> dict:
         """Shallow children() scan -> {'buttons': {name: wrapper}, 'edit',
@@ -596,6 +606,12 @@ class BoostUIA:
             except Exception:
                 return None
 
+        def ctype(w):
+            try:
+                return w.element_info.control_type
+            except Exception:
+                return ""
+
         c = self._grid_controls()
         more = c["buttons"].get("More...")
         if more is None:
@@ -611,26 +627,35 @@ class BoostUIA:
         arrow_more = c["opens"][0]
         r_more = rect(arrow_more)
         arrow_more.click_input()          # opens the property selector box
-        time.sleep(0.4)
+        time.sleep(0.5)
 
-        # The selector box has its own dropdown arrow (a different 'Open' from
-        # the More... row's). Click it so the property list is focused/open.
-        c = self._grid_controls()
-        sel_arrow = next((o for o in c["opens"] if rect(o) != r_more), None)
-        sel_arrow = sel_arrow or (c["opens"][0] if c["opens"] else None)
-        if sel_arrow is not None:
-            sel_arrow.click_input()
-            time.sleep(0.3)
+        # The selector box is a sibling of the grid, not a Table child -- scan
+        # the whole Options panel for its (new) dropdown arrow and Add button.
+        sel_arrow, add_btn = None, None
+        for b in self._options_panel().descendants(control_type="Button"):
+            nm = _text(b)
+            if nm == "Open" and rect(b) != r_more and sel_arrow is None:
+                sel_arrow = b
+            elif nm == "Add" and add_btn is None:
+                add_btn = b
+        if sel_arrow is None:
+            self.last_value = "<selector dropdown arrow not found>"
+            return False
+        sel_arrow.click_input()           # open the property list
+        time.sleep(0.3)
 
         # 'Font type' is the only option starting with F -> F selects, Enter
-        # commits; Tab moves to the Add button, Enter activates it.
+        # commits. Then click Add (by name) to add the property.
         send_keys("f")
         time.sleep(0.15)
         send_keys("{ENTER}")
         time.sleep(0.3)
-        send_keys("{TAB}")
-        time.sleep(0.1)
-        send_keys("{ENTER}")
+        if add_btn is not None:
+            add_btn.click_input()
+        else:
+            send_keys("{TAB}")
+            time.sleep(0.1)
+            send_keys("{ENTER}")
         time.sleep(0.4)
 
         present = "Font type" in self._grid_controls()["buttons"]
