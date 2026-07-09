@@ -137,6 +137,48 @@ class BoostUIA:
                 return True
         return False
 
+    def open_part_in_design(self, name: str | None = None, timeout: int = 25) -> bool:
+        """Open a part into Design view: optionally select `name` in the list,
+        then click the Design section's 'Open' button and wait for the Design
+        window. Records failure detail in self.last_value."""
+        import time
+        home = self.home()
+        if name is not None:
+            if not self.select_part(name):
+                self.last_value = f"<part {name!r} not in list>"
+                return False
+            time.sleep(0.6)
+
+        def click_open() -> bool:
+            try:
+                b = home.child_window(auto_id="Part.Detail.Design.Open",
+                                      control_type="Button")
+                if b.exists(timeout=1):
+                    b.click_input()
+                    return True
+            except Exception:
+                pass
+            return False
+
+        if not click_open():
+            # The Design detail section may be collapsed -- expand it and retry.
+            try:
+                home.child_window(auto_id="Part.Detail.Design").click_input()
+                time.sleep(0.6)
+            except Exception:
+                pass
+            if not click_open():
+                self.last_value = "<Design 'Open' button not found>"
+                return False
+
+        self.reset()                      # a new Design window is opening
+        for _ in range(timeout):
+            if self.has_design():
+                return True
+            time.sleep(1)
+        self.last_value = "<Design view did not open>"
+        return False
+
     # -- Design: dimensions & property grid ---------------------------------
 
     def read_dimensions(self) -> str:
@@ -753,7 +795,29 @@ def main() -> int:
                         help="Add the 'Font type' user-defined property (More... "
                              "-> Font type -> Add). Run on a text with no Font "
                              "type row yet.")
+    parser.add_argument("--open-part", metavar="NAME", nargs="?", const="",
+                        default=None,
+                        help="Open a part into Design view. With NAME, select "
+                             "that part in the Home list first; without, open the "
+                             "currently selected part.")
     args = parser.parse_args()
+
+    if args.open_part is not None:
+        try:
+            boost = BoostUIA()
+        except ImportError:
+            print("pywinauto not installed. Run: pip install --user pywinauto")
+            return 2
+        if not boost.has_home():
+            print("HomeZone window not found. Is Boost on the Home screen?")
+            return 1
+        import time
+        name = args.open_part or None
+        print(f"Opening part {name or '(currently selected)'} into Design ...")
+        t0 = time.time()
+        ok = boost.open_part_in_design(name)
+        print(f"  result -> {ok}   {boost.last_value!r}   ({time.time()-t0:.1f}s)")
+        return 0 if ok else 2
 
     if args.add_font:
         try:
