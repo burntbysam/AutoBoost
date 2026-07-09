@@ -615,32 +615,13 @@ class BoostUIA:
         c["opens"][0].click_input()       # opens the property selector box
         time.sleep(0.5)
 
-        # The selector box (a sibling of the grid, in the Options panel) holds a
-        # ComboBox to pick the property plus Add/Delete buttons. Find the combo
-        # and the Add button.
-        panel = self._options_panel()
-        combos = panel.descendants(control_type="ComboBox")
-        combo = combos[0] if combos else None
-        add_btn = next((b for b in panel.descendants(control_type="Button")
-                        if _text(b) == "Add"), None)
-        if combo is None:
-            self.last_value = "<selector combobox not found>"
-            return False
-
-        combo.click_input()               # focus/open the property combo
-        time.sleep(0.3)
-        # 'Font type' is the only option starting with F -> F selects, Enter
-        # commits. Then click Add (by name) to add the property.
-        send_keys("f")
-        time.sleep(0.15)
-        send_keys("{ENTER}")
-        time.sleep(0.3)
-        if add_btn is not None:
-            add_btn.click_input()
-        else:
-            send_keys("{TAB}")
-            time.sleep(0.1)
-            send_keys("{ENTER}")
+        # The selector box (ComboBox + Add/Delete) is owner-drawn, but it takes
+        # keyboard: Tab into the property combo, F selects 'Font type' (the only
+        # F option), Tab to the Add button, Enter to add it. All keys, no clicks
+        # outside the box (which would close it).
+        for key in ("{TAB}", "f", "{TAB}", "{ENTER}"):
+            send_keys(key)
+            time.sleep(0.15)
         time.sleep(0.4)
 
         present = "Font type" in self._grid_controls()["buttons"]
