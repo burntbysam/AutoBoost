@@ -27,11 +27,27 @@ from .config import DEFAULT
 from .navigator.boost_uia import BoostUIA
 
 
+# Zoom the placement point up before selecting the (possibly tiny) text. Scroll
+# zoom is cursor-anchored, so the text stays under the point while it enlarges.
+SELECT_ZOOM_STEPS = 6
+SELECT_SCROLL = -300   # per step; NEGATIVE zooms in on this Boost -- flip if it zooms OUT
+
+
 def _shot_bgr():
     import numpy as np
     import cv2
     import pyautogui
     return cv2.cvtColor(np.array(pyautogui.screenshot()), cv2.COLOR_RGB2BGR)
+
+
+def _zoom_at(px: int, py: int, steps: int, per_step: int) -> None:
+    import pyautogui
+    pyautogui.moveTo(px, py)
+    time.sleep(0.2)
+    for _ in range(steps):
+        pyautogui.scroll(per_step)
+        time.sleep(0.05)
+    time.sleep(0.3)
 
 
 def _canvas_rect(boost) -> tuple[int, int, int, int]:
@@ -94,8 +110,13 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
     time.sleep(t.after_esc)
     log(f"placed part-number text at ({px},{py}); tool exited")
 
+    # 3b. Zoom in at the placement point so a tiny text (large part) becomes big
+    #     enough to click reliably. Cursor-anchored, so it stays under (px,py).
+    _zoom_at(px, py, SELECT_ZOOM_STEPS, SELECT_SCROLL)
+    log("zoomed in for selection")
+
     # 4. Select the placed text. Boost ignores a click on the exact same pixel
-    #    just used to place, so nudge a few px -- still on the text.
+    #    just used to place, so nudge a few px -- still on the (now larger) text.
     sx, sy = px + 3, py + 3
     pyautogui.click(sx, sy)
     time.sleep(t.after_panel_open)
@@ -113,6 +134,19 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
     if not set_ok:
         log("could not set font -- aborting part")
         return False
+
+    # 5b. Restore Zoom Extents so the save dead-space click and verify line up
+    #     with the clean (pre-placement) frame captured at Extents.
+    pyautogui.press("esc")
+    time.sleep(t.after_esc)
+    try:
+        boost.design().wrapper_object().set_focus()
+    except Exception:
+        pass
+    time.sleep(0.2)
+    pyautogui.press("z")
+    time.sleep(t.after_zoom)
+    log("restored zoom extents")
 
     # 6. Save + verify (optional).
     if do_save:
