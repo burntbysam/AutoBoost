@@ -113,6 +113,9 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
 
     # 6. Save + verify (optional).
     if do_save:
+        # Exit the Properties menu so the save hotkey is picked up by the canvas.
+        pyautogui.press("esc")
+        time.sleep(t.after_esc)
         pre = _shot_bgr()
         pyautogui.press("2")
         time.sleep(t.after_save)
