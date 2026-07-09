@@ -77,19 +77,26 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
         return False
     px, py = res.point
 
-    # 3. Place the part-number text: activate tool, click, exit tool.
+    # 3. Place the part-number text: activate tool, click, then fully exit the
+    #    tool with Esc (twice -- one press sometimes doesn't drop the command, and
+    #    a lingering tool would make the next click place a SECOND number instead
+    #    of selecting).
     pyautogui.press("1")
     time.sleep(t.after_tool_activate)
     pyautogui.click(px, py)
     time.sleep(t.after_place_click)
     pyautogui.press("esc")
     time.sleep(t.after_esc)
-    log(f"placed part-number text at ({px},{py})")
+    pyautogui.press("esc")
+    time.sleep(t.after_esc)
+    log(f"placed part-number text at ({px},{py}); tool exited")
 
-    # 4. Select the placed text (click the same point) so Properties populates.
-    pyautogui.click(px, py)
+    # 4. Select the placed text. Boost ignores a click on the exact same pixel
+    #    just used to place, so nudge a few px -- still on the text.
+    sx, sy = px + 3, py + 3
+    pyautogui.click(sx, sy)
     time.sleep(t.after_panel_open)
-    log("selected placed text")
+    log(f"selected placed text (click at {sx},{sy})")
 
     # 5. Font: add the Font type property if absent, then set EasyType-L=10mm.
     if "Font type" not in boost._grid_controls()["buttons"]:
