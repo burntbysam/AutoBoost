@@ -113,9 +113,18 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
 
     # 6. Save + verify (optional).
     if do_save:
-        # Exit the Properties menu so the save hotkey is picked up by the canvas.
+        # Exit the Properties menu, then click empty part-body to DESELECT the
+        # text box (Esc alone leaves it selected, so '2' would act on it, not
+        # save). The placement clearance is the radius that is guaranteed on the
+        # part (no edge/hole), so a click just inside it -- offset off the text
+        # -- is safe dead-space.
         pyautogui.press("esc")
         time.sleep(t.after_esc)
+        off = max(25, min(60, int(res.clearance_px) - 10))
+        dead_x, dead_y = px, py + off
+        pyautogui.click(dead_x, dead_y)
+        time.sleep(0.4)
+        log(f"deselected text (click dead-space at {dead_x},{dead_y})")
         pre = _shot_bgr()
         pyautogui.press("2")
         time.sleep(t.after_save)
