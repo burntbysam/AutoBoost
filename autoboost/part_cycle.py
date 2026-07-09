@@ -135,33 +135,27 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
         log("could not set font -- aborting part")
         return False
 
-    # 5b. Restore Zoom Extents so the save dead-space click and verify line up
-    #     with the clean (pre-placement) frame captured at Extents.
+    # 5b. Deselect the text FIRST: Esc out of Properties, then click empty
+    #     part-body. Esc alone leaves the text selected (so '2' would act on it,
+    #     not save), and this click also focuses the canvas so the next
+    #     Zoom-Extents hotkey fires. The click is within the placement clearance
+    #     (guaranteed on the part, clear of edges/holes) and offset vertically
+    #     off the (horizontal) text.
     pyautogui.press("esc")
     time.sleep(t.after_esc)
-    try:
-        boost.design().wrapper_object().set_focus()
-    except Exception:
-        pass
-    time.sleep(0.2)
+    off = max(25, min(60, int(res.clearance_px) - 10))
+    dead_x, dead_y = px, py + off
+    pyautogui.click(dead_x, dead_y)
+    time.sleep(0.4)
+    log(f"deselected text (click dead-space at {dead_x},{dead_y})")
+
+    # 5c. Zoom back to Extents so the save + verify match the clean frame.
     pyautogui.press("z")
     time.sleep(t.after_zoom)
     log("restored zoom extents")
 
     # 6. Save + verify (optional).
     if do_save:
-        # Exit the Properties menu, then click empty part-body to DESELECT the
-        # text box (Esc alone leaves it selected, so '2' would act on it, not
-        # save). The placement clearance is the radius that is guaranteed on the
-        # part (no edge/hole), so a click just inside it -- offset off the text
-        # -- is safe dead-space.
-        pyautogui.press("esc")
-        time.sleep(t.after_esc)
-        off = max(25, min(60, int(res.clearance_px) - 10))
-        dead_x, dead_y = px, py + off
-        pyautogui.click(dead_x, dead_y)
-        time.sleep(0.4)
-        log(f"deselected text (click dead-space at {dead_x},{dead_y})")
         pyautogui.press("2")
         time.sleep(t.after_save)
         post = _shot_bgr()
