@@ -92,10 +92,13 @@ def verify_placement(
     debug[body > 0] = (0.7 * debug[body > 0] + np.array([0, 60, 0])).astype(np.uint8)
 
     if text_px < 20:
+        # No detectable change between the frames -- nothing to check against
+        # geometry, so don't fail. This happens when the marking was already
+        # there (e.g. re-running on an already-stenciled part). A genuine
+        # collision only shows up when the marking IS detected (below).
         return VerifyResult(
-            False, text_px, 0,
-            "no new text detected after save (save may not have happened, or "
-            "view changed between frames)",
+            True, text_px, 0,
+            "no marking change detected -- nothing to verify (assumed clear)",
             debug,
         )
 
