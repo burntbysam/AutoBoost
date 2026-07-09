@@ -591,26 +591,14 @@ class BoostUIA:
         """Add the 'Font type' user-defined property to the selected text.
 
         Recipe (from observed behavior): click 'More...' -> click the arrow that
-        appears on that row -> a selector box appears (another arrow + Add +
-        Delete) -> click that arrow -> 'Font type' is the only 'F' option, so F
-        selects it, Enter commits -> Tab to the Add button -> Enter.
-        Records the outcome in self.last_value.
+        appears on that row -> a selector box opens in the Options panel with a
+        ComboBox + Add/Delete buttons. Click the ComboBox, press F ('Font type'
+        is the only F option, so it selects and commits), then click Add. Every
+        click stays inside the box, which is required -- it closes on any click
+        outside it. Records the outcome in self.last_value.
         """
         import time
         from pywinauto.keyboard import send_keys
-
-        def rect(w):
-            try:
-                r = w.rectangle()
-                return (r.left, r.top, r.right, r.bottom)
-            except Exception:
-                return None
-
-        def ctype(w):
-            try:
-                return w.element_info.control_type
-            except Exception:
-                return ""
 
         c = self._grid_controls()
         more = c["buttons"].get("More...")
@@ -624,26 +612,23 @@ class BoostUIA:
         if not c["opens"]:
             self.last_value = "<More... dropdown arrow not found>"
             return False
-        arrow_more = c["opens"][0]
-        r_more = rect(arrow_more)
-        arrow_more.click_input()          # opens the property selector box
+        c["opens"][0].click_input()       # opens the property selector box
         time.sleep(0.5)
 
-        # The selector box is a sibling of the grid, not a Table child -- scan
-        # the whole Options panel for its (new) dropdown arrow and Add button.
-        sel_arrow, add_btn = None, None
-        for b in self._options_panel().descendants(control_type="Button"):
-            nm = _text(b)
-            if nm == "Open" and rect(b) != r_more and sel_arrow is None:
-                sel_arrow = b
-            elif nm == "Add" and add_btn is None:
-                add_btn = b
-        if sel_arrow is None:
-            self.last_value = "<selector dropdown arrow not found>"
+        # The selector box (a sibling of the grid, in the Options panel) holds a
+        # ComboBox to pick the property plus Add/Delete buttons. Find the combo
+        # and the Add button.
+        panel = self._options_panel()
+        combos = panel.descendants(control_type="ComboBox")
+        combo = combos[0] if combos else None
+        add_btn = next((b for b in panel.descendants(control_type="Button")
+                        if _text(b) == "Add"), None)
+        if combo is None:
+            self.last_value = "<selector combobox not found>"
             return False
-        sel_arrow.click_input()           # open the property list
-        time.sleep(0.3)
 
+        combo.click_input()               # focus/open the property combo
+        time.sleep(0.3)
         # 'Font type' is the only option starting with F -> F selects, Enter
         # commits. Then click Add (by name) to add the property.
         send_keys("f")
