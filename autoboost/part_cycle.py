@@ -67,9 +67,11 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
     time.sleep(t.after_zoom)
     log("zoom extents (z)")
 
-    # 2. Safe placement from the current canvas.
+    # 2. Safe placement from the current canvas. Keep this clean pre-placement
+    #    frame -- verify diffs against it later (the marking is the difference).
     rect = _canvas_rect(boost)
-    res = find_safe_placement(_shot_bgr(), DEFAULT, rect)
+    clean = _shot_bgr()
+    res = find_safe_placement(clean, DEFAULT, rect)
     log(f"placement: point={res.point} clearance={res.clearance_px:.0f}px "
         f"ok={res.ok} ({res.reason})")
     if res.point is None:
@@ -125,12 +127,14 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
         pyautogui.click(dead_x, dead_y)
         time.sleep(0.4)
         log(f"deselected text (click dead-space at {dead_x},{dead_y})")
-        pre = _shot_bgr()
         pyautogui.press("2")
         time.sleep(t.after_save)
         post = _shot_bgr()
         log("saved (2)")
-        v = verify_placement(pre, post, DEFAULT, rect)
+        # Verify against the CLEAN pre-placement frame: the marking is the diff
+        # (the text is already full-size before save, so a pre/post-save diff
+        # sees no change -- that was the false FAIL).
+        v = verify_placement(clean, post, DEFAULT, rect)
         log(f"verify -> {'PASS' if v.ok else 'FAIL'} ({v.reason})")
 
     # 7. Close Design view (optional).
