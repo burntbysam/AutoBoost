@@ -206,12 +206,17 @@ class BoostUIA:
     # 'Cutting Programs' header / the 'Allowed angular positions (Job)' label,
     # the same label-then-neighbour technique read_dimensions() uses.
 
-    CUT_NEW_AUTOIDS = ("Part.Detail.CuttingProgram.New",
-                       "Part.Detail.CuttingPrograms.New",
-                       "Part.Detail.NcProgram.New")
-    CUT_OPEN_AUTOIDS = ("Part.Detail.CuttingProgram.Open",
-                        "Part.Detail.CuttingPrograms.Open",
-                        "Part.Detail.NcProgram.Open")
+    # Confirmed from locate_cut_controls(): the section is 'CutSolutions'
+    # (header auto_id Part.Detail.CutSolutions.Header.Text) and its 'New' is
+    # Part.Detail.CutSolutions.AddSolution -- distinct from the Bending row's
+    # Part.Detail.BendSolutions.AddSolution.
+    CUT_NEW_AUTOIDS = ("Part.Detail.CutSolutions.AddSolution",)
+    # The program-row 'Open' only exists after 'New' is clicked, so its auto_id
+    # is not yet pinned; these follow the CutSolutions convention and the
+    # positional fallback (top-most 'Open' below the header) covers a miss.
+    CUT_OPEN_AUTOIDS = ("Part.Detail.CutSolutions.Open",
+                        "Part.Detail.CutSolutions.OpenSolution",
+                        "Part.Detail.CutSolutions.Solution.Open")
     ANGULAR_JOB_LABEL = "Allowed angular positions (Job)"
 
     def _home_wrapper(self):
