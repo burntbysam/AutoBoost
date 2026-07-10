@@ -80,31 +80,31 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost_0.02.01)
+  __init__.py            app name + version (AutoBoost Beta 0.5.0)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
-    placement.py         [built]   safe placement via distance transform
-    verify.py            [built]   post-save collision check (before/after diff)
-    text_detect.py       [planned] locate placed yellow text (port + harden)
+    placement.py         [built] safe placement via distance transform
+    verify.py            [built] post-save collision check (clean/after diff)
   navigator/
-    boost_uia.py         [built]   UIA driver: parts list, dims, property grid
-  part_cycle.py          [planned] one-part state machine
-  runner.py              [planned] job loop
-  reset.py               [planned] return-to-Home recovery
+    boost_uia.py         [built] UIA driver: parts list, open, dims, font chain
+  part_cycle.py          [built] one-part sequence (place -> font -> save -> verify)
+  runner.py              [built] job loop (open -> cycle -> close -> next)
 tools/
-  probe_uia.py           [built] dump Boost's UIA tree (decides navigator)
+  probe_uia.py           [built] dump Boost's UIA tree
+  probe_open_dropdown.py [built] open + dump an owner-drawn dropdown
 docs/
   ARCHITECTURE.md        this file
   BOOST_SETUP.md         required Boost/RDP settings for reliable vision
 ```
 
-## Current status / next inputs needed
+## Current status
 
-Foundation, placement, and the UIA probe are in. To choose the navigator and
-calibrate placement we need, from the RDP machine:
+Beta 0.5.0 -- feature-complete and validated by a full 11/11-part job run
+unattended with zero skips. The font chain (the hardest piece) is fully
+automated: `add_font_type` (keyboard through the property selector) and
+`set_font_by_drag` (held mouse-drag on the owner-drawn value list, the only
+gesture that control honours).
 
-1. Output of `tools/probe_uia.py` (decides UIA vs. vision navigation).
-2. A few representative Design-View screenshots after Zoom Extents -- a simple
-   part, a part with holes/cutouts, and an awkward/thin part -- at the real RDP
-   resolution, to tune `placement.py` and calibrate `required_clearance_px`.
+Roadmap (see README): trim speed, add an "already stenciled" skip guard, and
+calibrate `required_clearance_px` to the part-number length.
