@@ -1,4 +1,4 @@
-# AutoBoost Architecture (0.02.01)
+# AutoBoost Architecture (Beta 0.5.1)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -73,14 +73,17 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 - `part_cycle.py` -- state machine for one part (open -> zoom -> place -> select
   -> font -> save -> verify -> close), with per-step diagnostics.
 - `runner.py` -- the job loop: retry-per-part, skip-and-continue, consecutive-
-  failure auto-stop, run statistics. Bones ported from BoostPY v0.01.20.
+  failure auto-stop, run statistics. Also holds the **duplicate guard**: an
+  exact part number that recurs in the same sequence is stenciled once and its
+  recurrences are skipped (not opened) and flagged in the end-of-run summary.
+  Bones ported from BoostPY v0.01.20.
 - `reset.py` -- safe return-to-Home from any state (ESC/undo/close).
 
 ## Module map
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.5.0)
+  __init__.py            app name + version (AutoBoost Beta 0.5.1)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
@@ -100,11 +103,15 @@ docs/
 
 ## Current status
 
-Beta 0.5.0 -- feature-complete and validated by a full 11/11-part job run
+Beta 0.5.1 -- feature-complete and validated by a full 11/11-part job run
 unattended with zero skips. The font chain (the hardest piece) is fully
 automated: `add_font_type` (keyboard through the property selector) and
 `set_font_by_drag` (held mouse-drag on the owner-drawn value list, the only
-gesture that control honours).
+gesture that control honours). 0.5.1 adds the per-run duplicate guard and trims
+the settle delays.
 
-Roadmap (see README): trim speed, add an "already stenciled" skip guard, and
-calibrate `required_clearance_px` to the part-number length.
+Versioning: each shipped iteration bumps the patch by 0.0.1 (0.5.0 -> 0.5.1).
+
+Roadmap (see README): further speed gains (font-chain screenshots/retries), a
+cross-run "already stenciled" guard, and calibrate `required_clearance_px` to
+the part-number length.

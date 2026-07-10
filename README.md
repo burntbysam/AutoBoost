@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.5.0** — automated part-number stenciling for TRUMPF TruTops
+**AutoBoost Beta 0.5.1** — automated part-number stenciling for TRUMPF TruTops
 Boost.
 
 AutoBoost drives the Boost GUI to place a correctly-fonted (EasyType-L=10mm)
@@ -79,16 +79,30 @@ py tools/probe_uia.py --find barLeftDockSite --out dump.txt
 - Font list order lives in `BoostUIA.FONT_OPTIONS` — update it if the shop's
   font table changes.
 
+## Duplicate guard
+
+If the same exact part number appears more than once in a run's sequence,
+AutoBoost stencils it **once** — the first occurrence — and skips every
+recurrence without opening it (so a duplicate is never double-stamped). Each
+skipped duplicate is listed in a `*** FLAG` block in the end-of-run summary so
+you can reconcile the job. This is a name check against the Home list only; it
+does not detect a part that was stenciled in a *previous* run (see roadmap).
+
 ## Known limitations / roadmap
 
-- **Speed.** ~1 min/part (UIA + deliberate settle delays). Trimming the sleeps
-  and drag retries is the next task.
-- **No "already stenciled" guard.** Re-running a part adds a second number
-  (placement is deterministic). Run on un-stenciled parts; a skip guard is
-  planned.
+- **Speed.** Trimmed in 0.5.1 (settle delays cut where safe). Further gains need
+  reducing the font-chain screenshots/retries, measured on the live machine.
+- **No cross-run "already stenciled" guard.** The duplicate guard is per-run
+  (same sequence). Re-running a part that was stenciled in an *earlier* run adds
+  a second number (placement is deterministic). Detecting existing markings on
+  open is planned.
 - **Clearance floor.** The placement minimum (`required_clearance_px`) is a
   conservative constant; calibrating it to the part-number length (so very tight
   parts are flagged up front) is planned. Verify still catches a real collision.
+
+## Versioning
+
+Every shipped iteration increments the patch by 0.0.1 (0.5.0 → 0.5.1 → 0.5.2).
 
 ## Layout
 

@@ -73,16 +73,20 @@ class TimingConfig:
     values that were found to work in BoostPY v0.01.20 and are a starting point.
     """
 
-    after_screenshot: float = 0.5
-    after_open: float = 1.5
-    after_zoom: float = 1.5
-    after_tool_activate: float = 0.6
-    after_place_click: float = 1.2
-    after_esc: float = 0.8
-    after_panel_open: float = 1.5
-    after_save: float = 1.5
-    after_close: float = 2.0
-    after_next_part: float = 0.7
+    # Trimmed for speed in 0.5.1. Delays tied to real Boost work (panel populate
+    # after selecting text, save->geometry conversion, close) stay conservative;
+    # the pure UI-settle padding is cut. Bump an individual value back up if that
+    # specific step ever flakes.
+    after_screenshot: float = 0.3
+    after_open: float = 1.0
+    after_zoom: float = 0.7
+    after_tool_activate: float = 0.4
+    after_place_click: float = 0.7
+    after_esc: float = 0.35
+    after_panel_open: float = 1.0
+    after_save: float = 1.2
+    after_close: float = 1.2
+    after_next_part: float = 0.4
     startup_countdown: float = 5.0
 
 

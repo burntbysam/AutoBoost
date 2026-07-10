@@ -61,11 +61,23 @@ def run_job(part_names: list[str] | None = None,
     log(f"Job: {len(names)} part(s). Save={do_save} Close={do_close}")
 
     done = skipped = consec = 0
+    seen: set[str] = set()          # part numbers already processed this run
+    duplicates: list[str] = []      # exact names that recurred -> skipped + flagged
     for i, name in enumerate(names, 1):
         if _stop_requested():
             log("Stop requested (q) -- halting.")
             break
         log(f"\n=== [{i}/{len(names)}] {name} ===")
+
+        # Duplicate guard: an exact part number appearing twice in the same
+        # sequence is stenciled once. Skip the recurrence (don't open it) and
+        # flag it in the end-of-run summary rather than double-stamping.
+        if name in seen:
+            duplicates.append(name)
+            log("  DUPLICATE of an earlier part -- skipping (flagged for summary)")
+            continue
+        seen.add(name)
+
         boost.reset()
 
         if not boost.open_part_in_design(name):
@@ -99,6 +111,14 @@ def run_job(part_names: list[str] | None = None,
                 log("Too many consecutive failures -- stopping."); break
 
     log(f"\nJob complete: done={done}, skipped={skipped}, of {len(names)}")
+    if duplicates:
+        from collections import Counter
+        counts = Counter(duplicates)
+        log(f"\n*** FLAG: {len(duplicates)} duplicate part number(s) skipped "
+            f"(stenciled once, not re-stamped):")
+        for dup, n in counts.items():
+            extra = f" (appeared {n + 1}x)" if n > 1 else ""
+            log(f"      - {dup}{extra}")
     return skipped == 0
 
 
