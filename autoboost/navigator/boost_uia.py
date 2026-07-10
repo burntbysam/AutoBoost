@@ -30,6 +30,7 @@ import sys
 
 HOME_TITLE = "TruTops Boost - HomeZone"
 DESIGN_TITLE_RE = r".* - TruTops Boost - Design"
+CUT_TITLE_RE = r".* - TruTops Boost - Cut"
 
 
 def _text(wrapper) -> str:
@@ -74,6 +75,7 @@ class BoostUIA:
         self.desktop = Desktop(backend="uia")
         self._home = None
         self._design = None
+        self._cut = None
         self._grid = None
         self._table = None
         self._options = None
@@ -84,7 +86,8 @@ class BoostUIA:
     # which is the main source of slowness. Call reset() if windows change.
 
     def reset(self) -> None:
-        self._home = self._design = self._grid = self._table = self._options = None
+        self._home = self._design = self._cut = None
+        self._grid = self._table = self._options = None
 
     def home(self):
         if self._home is None:
@@ -96,6 +99,11 @@ class BoostUIA:
             self._design = self.desktop.window(title_re=DESIGN_TITLE_RE, control_type="Window")
         return self._design
 
+    def cut(self):
+        if self._cut is None:
+            self._cut = self.desktop.window(title_re=CUT_TITLE_RE, control_type="Window")
+        return self._cut
+
     def has_home(self) -> bool:
         try:
             return self.home().exists(timeout=1)
@@ -105,6 +113,12 @@ class BoostUIA:
     def has_design(self) -> bool:
         try:
             return self.design().exists(timeout=1)
+        except Exception:
+            return False
+
+    def has_cut(self) -> bool:
+        try:
+            return self.cut().exists(timeout=1)
         except Exception:
             return False
 
@@ -178,6 +192,225 @@ class BoostUIA:
             time.sleep(1)
         self.last_value = "<Design view did not open>"
         return False
+
+    # -- HomeZone: cutting programs -----------------------------------------
+    #
+    # Same window and naming convention as the Design 'Open' button
+    # (Part.Detail.Design.Open). We drive the cutting-program flow that hangs
+    # off every part's Home detail page:
+    #     Cutting Programs 'New'  ->  set 'Allowed angular positions (Job)'
+    #     ->  the program row's 'Open'  ->  the Cut window opens.
+    #
+    # The exact auto_ids are pinned below once locate_cut_controls() reports
+    # them; until then each lookup falls back to positional anchoring on the
+    # 'Cutting Programs' header / the 'Allowed angular positions (Job)' label,
+    # the same label-then-neighbour technique read_dimensions() uses.
+
+    CUT_NEW_AUTOIDS = ("Part.Detail.CuttingProgram.New",
+                       "Part.Detail.CuttingPrograms.New",
+                       "Part.Detail.NcProgram.New")
+    CUT_OPEN_AUTOIDS = ("Part.Detail.CuttingProgram.Open",
+                        "Part.Detail.CuttingPrograms.Open",
+                        "Part.Detail.NcProgram.Open")
+    ANGULAR_JOB_LABEL = "Allowed angular positions (Job)"
+
+    def _home_wrapper(self):
+        return self.home().wrapper_object()
+
+    @staticmethod
+    def _cy(rect) -> int:
+        return (rect.top + rect.bottom) // 2
+
+    def _named_buttons(self, name: str) -> list:
+        """Every HomeZone Button whose visible text equals `name`."""
+        return [b for b in self._home_wrapper().descendants(control_type="Button")
+                if _text(b) == name]
+
+    def _cut_header(self):
+        """The 'Cutting Programs (N)' section header Text wrapper, or None."""
+        for t in self._home_wrapper().descendants(control_type="Text"):
+            if _text(t).startswith("Cutting Programs"):
+                return t
+        return None
+
+    def _find_home_by_autoids(self, autoids, control_type="Button"):
+        home = self.home()
+        for aid in autoids:
+            try:
+                b = home.child_window(auto_id=aid, control_type=control_type)
+                if b.exists(timeout=0):
+                    return b.wrapper_object()
+            except Exception:
+                continue
+        return None
+
+    def find_cut_new_button(self):
+        """Locate the 'New' button on the Cutting Programs row.
+
+        Returns (wrapper, how) where how is the strategy that found it, or
+        (None, reason). There is also a 'New' on the Bending Programs row, so a
+        bare name match is not enough -- we require it to sit on the Cutting
+        Programs header row (or match the pinned auto_id).
+        """
+        b = self._find_home_by_autoids(self.CUT_NEW_AUTOIDS)
+        if b is not None:
+            return b, "auto_id"
+        hdr = self._cut_header()
+        if hdr is None:
+            return None, "'Cutting Programs' header not found"
+        hr = hdr.rectangle()
+        cy = self._cy(hr)
+        best = None
+        for btn in self._named_buttons("New"):
+            r = btn.rectangle()
+            if abs(self._cy(r) - cy) < 20 and r.left > hr.left:
+                if best is None or r.left < best.rectangle().left:
+                    best = btn
+        return (best, "positional") if best else (None, "no 'New' on the Cutting Programs row")
+
+    def _angular_combo(self):
+        """The ComboBox directly under the 'Allowed angular positions (Job)'
+        label (distinct from the Design section's 'Allowed angular positions')."""
+        home = self._home_wrapper()
+        labels = [t for t in home.descendants(control_type="Text")
+                  if _text(t) == self.ANGULAR_JOB_LABEL]
+        if not labels:
+            return None
+        lr = labels[0].rectangle()
+        best = None
+        for c in home.descendants(control_type="ComboBox"):
+            r = c.rectangle()
+            below = 0 <= r.top - lr.bottom < 45
+            aligned = abs(r.left - lr.left) < 80
+            if below and aligned and (best is None or r.top < best.rectangle().top):
+                best = c
+        return best
+
+    def set_cut_angular_positions(self, value: str = "0°;90°") -> bool:
+        """Set the 'Allowed angular positions (Job)' combo to `value`.
+
+        This HomeZone combo is a real WPF ComboBox (unlike the owner-drawn
+        Design font list), so the UIA select works; a click-open + pick fallback
+        covers a non-standard skin. Records the outcome in self.last_value.
+        """
+        import time
+        combo = self._angular_combo()
+        if combo is None:
+            self.last_value = "<angular-positions (Job) combo not found>"
+            return False
+        try:
+            combo.select(value)
+            self.last_value = value
+            return True
+        except Exception:
+            pass
+        # Fallback: open the list and click the matching item.
+        try:
+            combo.click_input()
+            time.sleep(0.4)
+            for item in self._home_wrapper().descendants(control_type="ListItem"):
+                if _text(item).strip() == value:
+                    item.click_input()
+                    self.last_value = value
+                    return True
+        except Exception:
+            pass
+        self.last_value = f"<could not set angular positions to {value!r}>"
+        return False
+
+    def find_cut_open_button(self):
+        """The 'Open' button on the newly-created cutting-program row.
+
+        Returns (wrapper, how) or (None, reason). Prefers the pinned auto_id;
+        otherwise the top-most 'Open' below the Cutting Programs header (the
+        program row sits directly under it; the Design 'Open' is above)."""
+        b = self._find_home_by_autoids(self.CUT_OPEN_AUTOIDS)
+        if b is not None:
+            return b, "auto_id"
+        hdr = self._cut_header()
+        if hdr is None:
+            return None, "'Cutting Programs' header not found"
+        hb = hdr.rectangle().bottom
+        below = [(btn.rectangle().top, btn) for btn in self._named_buttons("Open")
+                 if self._cy(btn.rectangle()) > hb]
+        if not below:
+            return None, "no 'Open' below the Cutting Programs header"
+        below.sort(key=lambda x: x[0])
+        return below[0][1], "positional"
+
+    def open_cut_program(self, timeout: int = 25) -> bool:
+        """Click the cutting-program row's 'Open' and wait for the Cut window."""
+        import time
+        btn, how = self.find_cut_open_button()
+        if btn is None:
+            self.last_value = f"<cut 'Open' button not found: {how}>"
+            return False
+        btn.click_input()
+        self.reset()                      # a new Cut window is opening
+        for _ in range(timeout):
+            if self.has_cut():
+                return True
+            time.sleep(1)
+        self.last_value = "<Cut window did not open>"
+        return False
+
+    def create_cut_program(self, angular: str = "0°;90°", log=print) -> bool:
+        """New cutting program -> set angular positions -> open the Cut window.
+
+        Assumes the target part is already selected in the Home list. Each step
+        logs so a failure points at one action.
+        """
+        import time
+        btn, how = self.find_cut_new_button()
+        if btn is None:
+            self.last_value = f"<cut 'New' not found: {how}>"
+            log(f"cut 'New' -> not found ({how})")
+            return False
+        btn.click_input()
+        log(f"clicked Cutting Programs 'New' ({how})")
+        time.sleep(1.0)                   # the new Cut1 row + settings appear
+
+        if not self.set_cut_angular_positions(angular):
+            log(f"set angular positions -> False ({self.last_value})")
+            return False
+        log(f"set '{self.ANGULAR_JOB_LABEL}' -> {angular}")
+        time.sleep(0.4)
+
+        if not self.open_cut_program():
+            log(f"open cut program -> False ({self.last_value})")
+            return False
+        log("cut program opened (Cut window)")
+        return True
+
+    def locate_cut_controls(self) -> str:
+        """Read-only report of the cutting-program controls and their auto_ids.
+
+        Clicks nothing. Run it with the part selected (and again after a manual
+        'New') to capture the exact auto_ids to pin in CUT_*_AUTOIDS."""
+        home = self._home_wrapper()
+        lines = [f"HomeZone open: {self.has_home()}"]
+        hdr = self._cut_header()
+        if hdr is not None:
+            r = hdr.rectangle()
+            lines.append(f"header {_text(hdr)!r} auto_id={_auto_id(hdr)!r} "
+                         f"rect=({r.left},{r.top},{r.right},{r.bottom})")
+        else:
+            lines.append("header 'Cutting Programs': NOT FOUND")
+        for name in ("New", "Open"):
+            for b in self._named_buttons(name):
+                r = b.rectangle()
+                lines.append(f"  {name:4} auto_id={_auto_id(b)!r} "
+                             f"rect=({r.left},{r.top},{r.right},{r.bottom})")
+        for t in home.descendants(control_type="Text"):
+            if "angular positions" in _text(t).lower():
+                r = t.rectangle()
+                lines.append(f"  label {_text(t)!r} auto_id={_auto_id(t)!r} "
+                             f"rect=({r.left},{r.top},{r.right},{r.bottom})")
+        for c in home.descendants(control_type="ComboBox"):
+            r = c.rectangle()
+            lines.append(f"  ComboBox auto_id={_auto_id(c)!r} value={_value(c)!r} "
+                         f"rect=({r.left},{r.top},{r.right},{r.bottom})")
+        return "\n".join(lines)
 
     # -- Design: dimensions & property grid ---------------------------------
 
@@ -800,7 +1033,45 @@ def main() -> int:
                         help="Open a part into Design view. With NAME, select "
                              "that part in the Home list first; without, open the "
                              "currently selected part.")
+    parser.add_argument("--locate-cut", action="store_true",
+                        help="Read-only: report the Cutting Programs controls and "
+                             "their auto_ids (clicks nothing). Run with the part "
+                             "selected, and again after a manual 'New'.")
+    parser.add_argument("--new-cut", action="store_true",
+                        help="Create a cutting program on the selected part: "
+                             "New -> set angular positions -> open the Cut window.")
+    parser.add_argument("--angular", default="0°;90°",
+                        help="Value for 'Allowed angular positions (Job)' "
+                             "(default: '0°;90°').")
     args = parser.parse_args()
+
+    if args.locate_cut:
+        try:
+            boost = BoostUIA()
+        except ImportError:
+            print("pywinauto not installed. Run: pip install --user pywinauto")
+            return 2
+        if not boost.has_home():
+            print("HomeZone window not found. Is Boost on the Home screen?")
+            return 1
+        print(boost.locate_cut_controls())
+        return 0
+
+    if args.new_cut:
+        try:
+            boost = BoostUIA()
+        except ImportError:
+            print("pywinauto not installed. Run: pip install --user pywinauto")
+            return 2
+        if not boost.has_home():
+            print("HomeZone window not found. Is Boost on the Home screen?")
+            return 1
+        import time
+        print(f"Creating cutting program (angular={args.angular!r}) ...")
+        t0 = time.time()
+        ok = boost.create_cut_program(args.angular, log=lambda m: print("  " + m))
+        print(f"  result -> {ok}   {boost.last_value!r}   ({time.time()-t0:.1f}s)")
+        return 0 if ok else 2
 
     if args.open_part is not None:
         try:
