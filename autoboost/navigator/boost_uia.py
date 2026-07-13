@@ -122,6 +122,21 @@ class BoostUIA:
         except Exception:
             return False
 
+    def wait_home(self, timeout: float = 15.0, poll: float = 0.4) -> bool:
+        """Block until the HomeZone window is back (or timeout). Needed after
+        closing Design/Cut: the window's teardown + Home re-render can take
+        several seconds, longer than a single has_home() check waits, so a phase
+        that starts right after a close would otherwise miss Home. Re-resets the
+        cached handle each poll so a stale spec can't mask the real window."""
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self._home = None
+            if self.has_home():
+                return True
+            time.sleep(poll)
+        return False
+
     # -- HomeZone: part list ------------------------------------------------
 
     def _result_list(self):

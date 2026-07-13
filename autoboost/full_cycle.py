@@ -69,6 +69,13 @@ def process_full_part(part_name: str,
 
     # --- Phase 2: cutting (re-select from Home, create program, apply, close).
     if do_cut:
+        # Closing Design (phase 1) tears the window down and re-renders Home;
+        # that takes longer than a single has_home() check waits, so block until
+        # Home is actually back before the cut phase touches it. Without this the
+        # cut phase raced the close and failed with "HomeZone window not found".
+        if do_stencil and not boost.wait_home():
+            log("cut: Home did not return after stencil close -- skipping cut")
+            return False
         boost.reset()
         try:
             ok = process_cut(part_name, angular=angular, do_finish=True,
