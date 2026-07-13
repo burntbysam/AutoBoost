@@ -91,6 +91,21 @@ class TimingConfig:
 
 
 @dataclass
+class CutConfig:
+    """Cut-window (Qt/Qtitan ribbon) parameters.
+
+    The Cut window's ribbon is a Qtitan control that exposes NO buttons to UIA
+    (confirmed by probe: the RibbonBar node has no button children), so its
+    tools are clicked by position within the maximized window. Offsets are from
+    the Cut window's top-left, valid for the 1920-wide 'Start' ribbon layout;
+    re-tune if the RDP resolution / ribbon layout changes.
+    """
+
+    # 'All : <machine>' auto-apply cutting-technology button on the Start tab.
+    apply_button_offset: tuple = (291, 85)
+
+
+@dataclass
 class Config:
     """Top-level AutoBoost configuration."""
 
@@ -114,6 +129,7 @@ class Config:
     canvas: CanvasRegion = field(default_factory=CanvasRegion)
     placement: PlacementConfig = field(default_factory=PlacementConfig)
     timing: TimingConfig = field(default_factory=TimingConfig)
+    cut: CutConfig = field(default_factory=CutConfig)
 
     def to_json(self, path: str) -> None:
         with open(path, "w", encoding="utf-8") as fh:
@@ -126,7 +142,11 @@ class Config:
         canvas = CanvasRegion(**data.pop("canvas", {}))
         placement = PlacementConfig(**data.pop("placement", {}))
         timing = TimingConfig(**data.pop("timing", {}))
-        return cls(canvas=canvas, placement=placement, timing=timing, **data)
+        cut_data = data.pop("cut", {})
+        if "apply_button_offset" in cut_data:
+            cut_data["apply_button_offset"] = tuple(cut_data["apply_button_offset"])
+        cut = CutConfig(**cut_data)
+        return cls(canvas=canvas, placement=placement, timing=timing, cut=cut, **data)
 
 
 DEFAULT = Config()

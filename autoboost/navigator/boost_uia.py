@@ -440,6 +440,39 @@ class BoostUIA:
         log("cut program opened (Cut window)")
         return True
 
+    def click_cut_apply_technology(self, dry_run: bool = False, offset=None) -> bool:
+        """Click the 'All : <machine>' auto-apply cutting-technology button on
+        the Cut window's Start ribbon tab.
+
+        The Qtitan ribbon exposes no buttons to UIA, so this is a positional
+        click within the maximized Cut window (offset from its top-left, in
+        config.cut.apply_button_offset). dry_run just moves the cursor there so
+        the target can be eyeballed without clicking. Records the point in
+        self.last_value.
+        """
+        import time
+        import pyautogui
+        from ..config import DEFAULT
+        if not self.has_cut():
+            self.last_value = "<Cut window not open>"
+            return False
+        win = self.cut().wrapper_object()
+        try:
+            win.set_focus()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        r = win.rectangle()
+        ox, oy = offset or DEFAULT.cut.apply_button_offset
+        x, y = r.left + int(ox), max(0, r.top) + int(oy)
+        if dry_run:
+            pyautogui.moveTo(x, y)
+            self.last_value = f"<dry-run: cursor at ({x},{y}); no click>"
+            return True
+        pyautogui.click(x, y)
+        self.last_value = f"clicked ({x},{y})"
+        return True
+
     def locate_cut_controls(self) -> str:
         """Read-only report of the cutting-program controls and their auto_ids.
 
@@ -1107,6 +1140,10 @@ def main() -> int:
                         help="Value for 'Allowed angular positions (Job)'. "
                              "Omit to select the LAST option ('0°;90°...') by "
                              "keyboard; pass e.g. '0°;90°' to select by name.")
+    parser.add_argument("--cut-apply", action="store_true",
+                        help="Click the auto-apply cutting-technology button on "
+                             "the open Cut window (Qt ribbon, positional). Add "
+                             "--dry-run to only move the cursor there.")
     args = parser.parse_args()
 
     if args.locate_cut:
@@ -1135,6 +1172,24 @@ def main() -> int:
         t0 = time.time()
         ok = boost.create_cut_program(args.angular, log=lambda m: print("  " + m))
         print(f"  result -> {ok}   {boost.last_value!r}   ({time.time()-t0:.1f}s)")
+        return 0 if ok else 2
+
+    if args.cut_apply:
+        try:
+            boost = BoostUIA()
+        except ImportError:
+            print("pywinauto not installed. Run: pip install --user pywinauto")
+            return 2
+        if not boost.has_cut():
+            print("Cut window not found. Open a cutting program first.")
+            return 1
+        mode = "DRY-RUN (cursor only)" if args.dry_run else "LIVE (will click)"
+        print(f"{mode}: auto-apply cutting technology ...")
+        ok = boost.click_cut_apply_technology(dry_run=args.dry_run)
+        print(f"  result -> {ok}   {boost.last_value!r}")
+        if args.dry_run:
+            print("  Is the cursor sitting on the 'All : <machine>' button? If "
+                  "it's off, tell me the direction and I'll nudge the offset.")
         return 0 if ok else 2
 
     if args.open_part is not None:
