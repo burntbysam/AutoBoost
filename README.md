@@ -3,6 +3,22 @@
 **AutoBoost Beta 0.7.6** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
+> **This branch is active development, not the stable release.** The GUI
+> control panel, auto-update check, and this installer have only been tested
+> headlessly off-machine — not yet run against live Boost. The `main` branch
+> tracks the last version validated end-to-end on the real workstation
+> (currently 0.7.3, console-only); this branch is promoted to `main` once
+> the newer pieces are confirmed working for real.
+
+## Download
+
+**[Get `AutoBoost_Installer.bat`](https://github.com/burntbysam/AutoBoost/blob/claude/autoboost-handoff-ei9bk3/AutoBoost_Installer.bat)**
+— open that page and click **Download raw file**, save it anywhere, then
+double-click it on the Boost workstation. That one file installs AutoBoost on
+a fresh machine or updates an existing install, entirely per-user with no
+admin rights needed. Full details in [Install](#install-on-the-rdp-workstation-no-admin-needed)
+below.
+
 AutoBoost drives the Boost GUI, unattended, across every part in a job. Two
 tools today, runnable separately or fused into one pass:
 
