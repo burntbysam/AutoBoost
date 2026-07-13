@@ -324,28 +324,43 @@ class BoostUIA:
         return False
 
     def set_cut_angular_last(self) -> bool:
-        """Select the LAST option in the 'Allowed angular positions (Job)' combo
-        by keyboard: open -> End -> Enter.
+        """Select the LAST option in the 'Allowed angular positions (Job)' combo.
 
-        The wanted value ('0°;90°...') is the last item, and picking it by
-        position avoids matching that awkward string (trailing '...', and the
-        degree glyphs are easy to mis-encode). Records the read-back in
+        Uses the same native UIA select() that reliably set '0°;90°' before,
+        but reads the combo's own option list and selects the last entry by its
+        exact text -- so we get '0°;90°...' without hardcoding that awkward
+        string (trailing '...', degree glyphs). Records the read-back in
         self.last_value.
         """
         import time
-        from pywinauto.keyboard import send_keys
         combo = self._angular_combo()
         if combo is None:
             self.last_value = "<angular-positions (Job) combo not found>"
             return False
         try:
-            combo.click_input()          # open the list
+            items = combo.item_texts()   # the enumerable option strings
+        except Exception:
+            items = []
+        if items:
+            last = items[-1]
+            for pick in (last, len(items) - 1):   # by exact text, then by index
+                try:
+                    combo.select(pick)
+                    self.last_value = last
+                    return True
+                except Exception:
+                    continue
+        # Fallback: open with a real mouse click and press End+Enter (the manual
+        # gesture) in case the option list is virtualized and item_texts is empty.
+        from pywinauto.keyboard import send_keys
+        try:
+            combo.click_input()
             time.sleep(0.4)
-            send_keys("{END}")           # jump to the last option
+            send_keys("{END}")
             time.sleep(0.2)
-            send_keys("{ENTER}")         # commit
+            send_keys("{ENTER}")
             time.sleep(0.3)
-            self.last_value = _value(combo) or "<last option>"
+            self.last_value = (items[-1] if items else _value(combo)) or "<last option>"
             return True
         except Exception as exc:         # noqa: BLE001
             self.last_value = f"<angular last-select failed: {exc!r}>"
@@ -453,6 +468,11 @@ class BoostUIA:
             r = c.rectangle()
             lines.append(f"  ComboBox auto_id={_auto_id(c)!r} value={_value(c)!r} "
                          f"rect=({r.left},{r.top},{r.right},{r.bottom})")
+            if "angular" in _auto_id(c).lower() or "orientation" in _auto_id(c).lower():
+                try:
+                    lines.append(f"       items={c.item_texts()!r}")
+                except Exception as exc:
+                    lines.append(f"       items=<unreadable: {exc!r}>")
         return "\n".join(lines)
 
     # -- Design: dimensions & property grid ---------------------------------
