@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.0)
+# AutoBoost Architecture (Beta 0.7.1)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -72,18 +72,23 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 - `part_cycle.py` -- state machine for one part (open -> zoom -> place -> select
   -> font -> save -> verify -> close), with per-step diagnostics.
-- `runner.py` -- the job loop: retry-per-part, skip-and-continue, consecutive-
-  failure auto-stop, run statistics. Also holds the **duplicate guard**: an
-  exact part number that recurs in the same sequence is stenciled once and its
-  recurrences are skipped (not opened) and flagged in the end-of-run summary.
-  Bones ported from BoostPY v0.01.20.
+- `stencil_runner.py` -- the job loop: retry-per-part, skip-and-continue,
+  consecutive-failure auto-stop, run statistics. Also holds the **duplicate
+  guard**: an exact part number that recurs in the same sequence is stenciled
+  once and its recurrences are skipped (not opened) and flagged in the end-of-run
+  summary. Bones ported from BoostPY v0.01.20.
+- `cut_runner.py` / `full_runner.py` -- the same loop shape for the cutting and
+  combined (stencil-then-cut) jobs. `full_runner` composes the two single-process
+  cycles per part; because each half starts and ends on Home they chain without a
+  new mechanism, and the cut half is attempted only when the stencil half
+  succeeded, so a part is never left half-finished.
 - `reset.py` -- safe return-to-Home from any state (ESC/undo/close).
 
 ## Module map
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.0)
+  __init__.py            app name + version (AutoBoost Beta 0.7.1)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
@@ -93,10 +98,12 @@ autoboost/
     boost_uia.py         [built] UIA driver: parts list (scroll-aware), open,
                                  dims, font chain, cutting-program controls
   part_cycle.py          [built] stencil: one part (place -> font -> save -> verify)
-  runner.py              [built] stencil job loop (open -> cycle -> close -> next)
+  stencil_runner.py      [built] stencil job loop (open -> cycle -> close -> next)
   cut_cycle.py           [built] cutting: one part (new -> angular -> open ->
                                  apply -> save -> close)
   cut_runner.py          [built] cutting job loop over the Home list
+  full_cycle.py          [built] combined: one part, stencil then cut
+  full_runner.py         [built] combined job loop (stencil+cut per part)
 tools/
   probe_uia.py           [built] dump Boost's UIA tree
   probe_open_dropdown.py [built] open + dump an owner-drawn dropdown
@@ -120,7 +127,7 @@ auto_id.
 
 ## Current status
 
-Beta 0.7.0 -- two validated tools (from the 0.5.x cutting-program line):
+Beta 0.7.1 -- two validated tools plus a combined runner that chains them:
 
 - **Stenciling** -- an 11/11-part job ran unattended with zero skips. The font
   chain (the hardest piece) is fully automated: `add_font_type` (keyboard
@@ -129,6 +136,10 @@ Beta 0.7.0 -- two validated tools (from the 0.5.x cutting-program line):
 - **Cutting programs** -- a full 17-part job ran end to end. The Home controls
   are UIA (`Part.Detail.CutSolutions.*`); the Cut window's ribbon is positional (the click focuses + maximizes the
 window first so the left-anchored offset holds).
+- **Combined (0.7.1)** -- `full_runner` does both per part (stencil then cut)
+  before advancing. It reuses the two validated cycles unchanged; the only new
+  code is the composition and a recover step that can close whichever window (Cut
+  or Design) a failed part left open.
 
 Notable fixes on the way: the Home parts list is virtualized, so `parts()` /
 `select_part()` scroll to enumerate/reach every row; and the angular-positions

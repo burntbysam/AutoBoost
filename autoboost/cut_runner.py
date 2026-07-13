@@ -21,7 +21,7 @@ import time
 
 from .navigator.boost_uia import BoostUIA
 from .cut_cycle import process_cut
-from .runner import _stop_requested
+from .stencil_runner import _stop_requested
 
 
 def _recover_to_home(boost: BoostUIA, log=print) -> None:

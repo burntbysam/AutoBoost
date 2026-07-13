@@ -5,9 +5,9 @@ For each part: open it into Design view, run the in-Design cycle
 done/skipped, stops after too many consecutive failures, and always tries to
 return to Home on error so one bad part doesn't wedge the whole run.
 
-    py -m autoboost.runner                     # all parts, save + close
-    py -m autoboost.runner --parts 8604305I-1 8604302I-1
-    py -m autoboost.runner --no-save --no-close    # dry mechanics test
+    py -m autoboost.stencil_runner                     # all parts, save + close
+    py -m autoboost.stencil_runner --parts 8604305I-1 8604302I-1
+    py -m autoboost.stencil_runner --no-save --no-close    # dry mechanics test
 
 Kill switch: Ctrl+C in the terminal, or hold 'q' (needs the keyboard package).
 """
