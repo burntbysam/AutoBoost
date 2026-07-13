@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.4** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.5** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 AutoBoost drives the Boost GUI, unattended, across every part in a job. Two
@@ -61,6 +61,14 @@ exactly what the console runners would print, and **Save Log…** writes it to a
 file. **Cancel** is graceful — the run stops before the *next* part, so the
 current part finishes (or recovers to Home) and nothing is left half-done.
 Uses tkinter (ships with Python): nothing extra to install.
+
+On every launch the panel **checks for a newer version** (a git fetch of this
+branch) and asks before installing it; after an update, relaunch to run the
+new code. If the check can't run — offline, git trouble, anything — it logs
+"Version check failed" and the tool works as-is. The font
+(`EasyType-L=10mm`) and angular positions (last option) are fixed to the
+validated shop standard in the GUI; the CLI runners keep `--font`/`--angular`
+for calibration work.
 
 **Part-number stenciling:**
 ```
@@ -190,6 +198,7 @@ panel (`gui`).
   - `cut_cycle` + `cut_runner` — cutting-program creation (one part / whole job)
   - `full_cycle` + `full_runner` — combined stencil-then-cut (one part / whole job)
   - `gui` — tkinter control panel (Start/Cancel, live log, log save) over the same job loop
+  - `updater` — launch-time version check + git fast-forward update (best-effort, never blocks)
 - `tools/` — UIA probes
 - `docs/ARCHITECTURE.md` — design and module map
 - `docs/BOOST_SETUP.md` — required Boost/RDP settings

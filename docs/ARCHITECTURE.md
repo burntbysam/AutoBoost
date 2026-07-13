@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.4)
+# AutoBoost Architecture (Beta 0.7.5)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -88,12 +88,18 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
   main loop drains; Cancel sets `stencil_runner.STOP`, the cooperative stop
   event all three runners already poll between parts, so a GUI stop is exactly
   as graceful as the 'q' kill switch (the current part finishes or recovers).
+  On launch it runs `updater.check_for_update()` in a thread and offers to
+  install (git fast-forward); a failed check logs one line and never blocks.
+- `updater.py` -- stdlib-only version check against the clone's own branch
+  (`git fetch` + `rev-list HEAD..origin/<branch>`) and `--ff-only` update.
+  Any failure returns status "failed" rather than raising: updating is
+  optional, running jobs is not.
 
 ## Module map
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.4)
+  __init__.py            app name + version (AutoBoost Beta 0.7.5)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
@@ -110,6 +116,7 @@ autoboost/
   full_cycle.py          [built] combined: one part, stencil then cut
   full_runner.py         [built] combined job loop (stencil+cut per part)
   gui.py                 [built] tkinter control panel: Start/Cancel + live log
+  updater.py             [built] launch-time version check + git ff update
 tools/
   probe_uia.py           [built] dump Boost's UIA tree
   probe_open_dropdown.py [built] open + dump an owner-drawn dropdown
@@ -133,7 +140,7 @@ auto_id.
 
 ## Current status
 
-Beta 0.7.4 -- two validated tools plus a combined runner that chains them:
+Beta 0.7.5 -- two validated tools plus a combined runner that chains them:
 
 - **Stenciling** -- an 11/11-part job ran unattended with zero skips. The font
   chain (the hardest piece) is fully automated: `add_font_type` (keyboard
@@ -149,6 +156,10 @@ window first so the left-anchored offset holds).
 - **Control panel (0.7.4)** -- `gui` runs any of the three modes from a window
   (Start / graceful Cancel / live log with save-to-file), wrapping
   `run_full_job` unchanged.
+- **Auto-update check (0.7.5)** -- every GUI launch checks the branch's remote
+  and asks before fast-forwarding; a failed check is one log line, never a
+  blocker. The GUI's font/angular fields were removed (fixed to the validated
+  shop standard); the CLI keeps the flags.
 
 Notable fixes on the way: the Home parts list is virtualized, so `parts()` /
 `select_part()` scroll to enumerate/reach every row; and the angular-positions

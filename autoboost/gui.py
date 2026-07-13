@@ -19,6 +19,15 @@ Cancel is graceful, like the 'q' kill switch: the run halts before the NEXT
 part, so the current part always finishes (or recovers to Home) and nothing is
 left half-done. Ctrl+C in a console / holding 'q' still work as backstops.
 
+On every launch the panel checks for a newer version (git fetch of this
+branch) and offers to install it. If the check can't run -- no network, git
+trouble, anything -- it just says "Version check failed" and the tool works
+as-is; updating is never required to run a job.
+
+The font is fixed to the shop standard (EasyType-L=10mm) and the angular
+positions to the last option -- the values every validated run has used. The
+CLI runners still take --font / --angular for calibration work.
+
 Built on tkinter (ships with Python) -- nothing new to install.
 """
 
@@ -41,6 +50,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from . import __release__
+from . import updater
 
 DEFAULT_FONT = "EasyType-L=10mm"
 
@@ -50,6 +60,21 @@ class _Done:
 
     def __init__(self, ok: bool):
         self.ok = ok
+
+
+class _UpdateCheckDone:
+    """Sentinel: the launch-time version check finished."""
+
+    def __init__(self, check: updater.UpdateCheck):
+        self.check = check
+
+
+class _UpdateApplied:
+    """Sentinel: the update attempt finished."""
+
+    def __init__(self, ok: bool, msg: str):
+        self.ok = ok
+        self.msg = msg
 
 
 class App:
@@ -67,6 +92,7 @@ class App:
         self._append(f"{__release__} -- control panel")
         self._append("Put Boost on the Home screen, pick a job, hit Start.")
         root.after(self.POLL_MS, self._poll)
+        self._start_update_check()
 
     # ------------------------------------------------------------------ layout
 
@@ -99,29 +125,22 @@ class App:
                   text="Separate with spaces or commas, e.g.  8604300I-1, 8604301I-1"
                   ).pack(anchor="w", padx=8, pady=(0, 4))
 
-        # --- options
+        # --- options (font + angular positions are fixed to the shop standard;
+        # the CLI runners keep --font/--angular for calibration work)
         opt = ttk.LabelFrame(frm, text="Options")
         opt.pack(fill="x", **pad)
-        self.font = tk.StringVar(value=DEFAULT_FONT)
-        self.angular = tk.StringVar()
         self.max_failures = tk.StringVar(value="5")
         self.delay = tk.StringVar(value="5")
 
-        def opt_field(col: int, label: str, var: tk.StringVar, width: int,
-                      hint: str = "") -> None:
+        def opt_field(col: int, label: str, var: tk.StringVar, width: int) -> None:
             ttk.Label(opt, text=label).grid(row=0, column=col, sticky="w",
                                             padx=(10, 2), pady=4)
             e = ttk.Entry(opt, textvariable=var, width=width)
-            e.grid(row=1, column=col, sticky="w", padx=(10, 2), pady=(0, 2))
+            e.grid(row=1, column=col, sticky="w", padx=(10, 2), pady=(0, 4))
             self._inputs.append(e)
-            if hint:
-                ttk.Label(opt, text=hint, foreground="gray").grid(
-                    row=2, column=col, sticky="w", padx=(10, 2), pady=(0, 4))
 
-        opt_field(0, "Font", self.font, 18)
-        opt_field(1, "Angular positions", self.angular, 14, "blank = last option")
-        opt_field(2, "Max consec. failures", self.max_failures, 6)
-        opt_field(3, "Start delay (s)", self.delay, 6)
+        opt_field(0, "Max consec. failures", self.max_failures, 6)
+        opt_field(1, "Start delay (s)", self.delay, 6)
 
         # --- buttons
         btns = ttk.Frame(frm)
@@ -178,6 +197,52 @@ class App:
         except OSError as exc:
             messagebox.showerror("AutoBoost", f"Could not save the log:\n{exc}")
 
+    # ---------------------------------------------------------- update check
+
+    def _start_update_check(self) -> None:
+        """Launch-time version check, off the UI thread. Best-effort by design:
+        a failed check logs one line and the tool is fully usable regardless."""
+        self._append("Checking for a newer version...")
+        threading.Thread(
+            target=lambda: self.q.put(_UpdateCheckDone(updater.check_for_update())),
+            daemon=True).start()
+
+    def _on_update_check(self, check: updater.UpdateCheck) -> None:
+        if check.status == "failed":
+            self._append(f"Version check failed ({check.detail}) -- "
+                         "continuing with the current version.")
+            return
+        if check.status == "current":
+            self._append("Version check: you are on the latest version.")
+            return
+        self._append(f"Version check: a newer version is available ({check.detail}).")
+        if self.worker and self.worker.is_alive():
+            self._append("A job is running -- update offered again on the next launch.")
+            return
+        if not messagebox.askyesno(
+                "AutoBoost update",
+                f"A newer version of AutoBoost is available\n({check.detail}).\n\n"
+                "Install it now?"):
+            self._append("Update declined -- staying on the current version.")
+            return
+        self._append("Installing the update...")
+        self.start_btn.configure(state="disabled")
+        threading.Thread(
+            target=lambda: self.q.put(_UpdateApplied(*updater.apply_update())),
+            daemon=True).start()
+
+    def _on_update_applied(self, res: _UpdateApplied) -> None:
+        if not (self.worker and self.worker.is_alive()):
+            self.start_btn.configure(state="normal")
+        if res.ok:
+            self._append(res.msg)
+            messagebox.showinfo(
+                "AutoBoost update",
+                "Update installed.\n\nClose and relaunch AutoBoost to run the "
+                "new version.")
+        else:
+            self._append(f"{res.msg} -- continuing with the current version.")
+
     # ------------------------------------------------------------ start/cancel
 
     def _start(self) -> None:
@@ -195,8 +260,8 @@ class App:
         mode = self.mode.get()
         params = dict(
             parts=part_names or None,
-            font=self.font.get().strip() or DEFAULT_FONT,
-            angular=self.angular.get().strip() or None,
+            font=DEFAULT_FONT,
+            angular=None,
             do_stencil=(mode != "cut"),
             do_cut=(mode != "stencil"),
             max_failures=max_failures,
@@ -293,6 +358,10 @@ class App:
                 item = self.q.get_nowait()
                 if isinstance(item, _Done):
                     self._finish(item.ok)
+                elif isinstance(item, _UpdateCheckDone):
+                    self._on_update_check(item.check)
+                elif isinstance(item, _UpdateApplied):
+                    self._on_update_applied(item)
                 else:
                     self._append(str(item))
         except queue.Empty:
