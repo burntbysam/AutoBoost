@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.5.9** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.0** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 AutoBoost drives the Boost GUI, unattended, across every part in a job. Two
@@ -139,7 +139,9 @@ detect work done in a *previous* run (see roadmap).
 
 ## Versioning
 
-Every shipped iteration increments the patch by 0.0.1 (0.5.0 → 0.5.1 → 0.5.2).
+Each iteration increments the patch by 0.0.1 (0.5.0 → 0.5.1 → 0.5.2). Minor
+bumps mark milestones: 0.5.9 was the last of the cutting-program line (stencil +
+cutting tools validated); 0.7.0 opens the next line of work.
 
 ## Layout
 
