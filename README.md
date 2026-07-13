@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.3** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.4** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 AutoBoost drives the Boost GUI, unattended, across every part in a job. Two
@@ -49,6 +49,18 @@ first — the vision is tuned to a crisp, 100%-scale, maximized Boost window.
 Put Boost on the **Home** screen, then run one of the three job runners. Each
 counts down 5 s, processes every part, and prints a `done/skipped` tally.
 **Kill switch:** Ctrl+C, or hold `q` (needs the `keyboard` package).
+
+**Control panel (GUI):**
+```
+py -m autoboost.gui          # window with Start/Cancel and a live log
+pyw -m autoboost.gui         # same, without a console window
+```
+All three jobs from one window: pick the mode (stencil + cut / stencil only /
+cut only), optionally list specific parts, hit **Start**. The log pane shows
+exactly what the console runners would print, and **Save Log…** writes it to a
+file. **Cancel** is graceful — the run stops before the *next* part, so the
+current part finishes (or recovers to Home) and nothing is left half-done.
+Uses tkinter (ships with Python): nothing extra to install.
 
 **Part-number stenciling:**
 ```
@@ -168,7 +180,8 @@ detect work done in a *previous* run (see roadmap).
 Each iteration increments the patch by 0.0.1 (0.5.0 → 0.5.1 → 0.5.2). Minor
 bumps mark milestones: 0.5.9 was the last of the cutting-program line (stencil +
 cutting tools validated); 0.7.0 opened the current line; 0.7.1 fuses the two
-tools into a combined per-part runner (`full_runner`).
+tools into a combined per-part runner (`full_runner`); 0.7.4 adds the control
+panel (`gui`).
 
 ## Layout
 
@@ -176,6 +189,7 @@ tools into a combined per-part runner (`full_runner`).
   - `part_cycle` + `stencil_runner` — part-number stenciling (one part / whole job)
   - `cut_cycle` + `cut_runner` — cutting-program creation (one part / whole job)
   - `full_cycle` + `full_runner` — combined stencil-then-cut (one part / whole job)
+  - `gui` — tkinter control panel (Start/Cancel, live log, log save) over the same job loop
 - `tools/` — UIA probes
 - `docs/ARCHITECTURE.md` — design and module map
 - `docs/BOOST_SETUP.md` — required Boost/RDP settings

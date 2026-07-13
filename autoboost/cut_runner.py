@@ -62,7 +62,7 @@ def run_cut_job(part_names: list[str] | None = None,
     duplicates: list[str] = []
     for i, name in enumerate(names, 1):
         if _stop_requested():
-            log("Stop requested (q) -- halting.")
+            log("Stop requested -- halting.")
             break
         log(f"\n=== [{i}/{len(names)}] {name} ===")
 

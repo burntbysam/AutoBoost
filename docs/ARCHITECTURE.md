@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.3)
+# AutoBoost Architecture (Beta 0.7.4)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -83,12 +83,17 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
   new mechanism, and the cut half is attempted only when the stencil half
   succeeded, so a part is never left half-finished.
 - `reset.py` -- safe return-to-Home from any state (ESC/undo/close).
+- `gui.py` -- tkinter control panel over the same loop. The job runs in a worker
+  thread (STA COM, `sys.coinit_flags = 2`) that reports through a queue the Tk
+  main loop drains; Cancel sets `stencil_runner.STOP`, the cooperative stop
+  event all three runners already poll between parts, so a GUI stop is exactly
+  as graceful as the 'q' kill switch (the current part finishes or recovers).
 
 ## Module map
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.3)
+  __init__.py            app name + version (AutoBoost Beta 0.7.4)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
@@ -104,6 +109,7 @@ autoboost/
   cut_runner.py          [built] cutting job loop over the Home list
   full_cycle.py          [built] combined: one part, stencil then cut
   full_runner.py         [built] combined job loop (stencil+cut per part)
+  gui.py                 [built] tkinter control panel: Start/Cancel + live log
 tools/
   probe_uia.py           [built] dump Boost's UIA tree
   probe_open_dropdown.py [built] open + dump an owner-drawn dropdown
@@ -127,7 +133,7 @@ auto_id.
 
 ## Current status
 
-Beta 0.7.3 -- two validated tools plus a combined runner that chains them:
+Beta 0.7.4 -- two validated tools plus a combined runner that chains them:
 
 - **Stenciling** -- an 11/11-part job ran unattended with zero skips. The font
   chain (the hardest piece) is fully automated: `add_font_type` (keyboard
@@ -140,6 +146,9 @@ window first so the left-anchored offset holds).
   before advancing. It reuses the two validated cycles unchanged; the only new
   code is the composition and a recover step that can close whichever window (Cut
   or Design) a failed part left open.
+- **Control panel (0.7.4)** -- `gui` runs any of the three modes from a window
+  (Start / graceful Cancel / live log with save-to-file), wrapping
+  `run_full_job` unchanged.
 
 Notable fixes on the way: the Home parts list is virtualized, so `parts()` /
 `select_part()` scroll to enumerate/reach every row; and the angular-positions

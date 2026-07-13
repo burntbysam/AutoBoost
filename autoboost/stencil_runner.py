@@ -16,13 +16,27 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 import time
 
 from .navigator.boost_uia import BoostUIA
 from .part_cycle import process_open_part
 
+# Cooperative stop flag shared by every job loop (all three runners check it via
+# _stop_requested). The GUI's Cancel button sets it; holding 'q' is the console
+# equivalent. It is checked between parts, so a stop never abandons a part
+# mid-action -- the current part finishes (or recovers to Home) first.
+STOP = threading.Event()
+
+
+def request_stop() -> None:
+    """Ask the running job loop to halt before the next part."""
+    STOP.set()
+
 
 def _stop_requested() -> bool:
+    if STOP.is_set():
+        return True
     try:
         import keyboard
         return keyboard.is_pressed("q")
@@ -65,7 +79,7 @@ def run_job(part_names: list[str] | None = None,
     duplicates: list[str] = []      # exact names that recurred -> skipped + flagged
     for i, name in enumerate(names, 1):
         if _stop_requested():
-            log("Stop requested (q) -- halting.")
+            log("Stop requested -- halting.")
             break
         log(f"\n=== [{i}/{len(names)}] {name} ===")
 
