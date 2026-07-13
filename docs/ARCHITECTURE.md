@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.5)
+# AutoBoost Architecture (Beta 0.7.6)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -99,7 +99,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.5)
+  __init__.py            app name + version (AutoBoost Beta 0.7.6)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
@@ -123,6 +123,8 @@ tools/
 docs/
   ARCHITECTURE.md        this file
   BOOST_SETUP.md         required Boost/RDP settings for reliable vision
+install.bat              [built] one-file installer/updater (clone or ff-update,
+                                 pip --user, Desktop shortcut; per-user, no admin)
 ```
 
 ## The Cut window (a second opaque surface)
@@ -140,7 +142,7 @@ auto_id.
 
 ## Current status
 
-Beta 0.7.5 -- two validated tools plus a combined runner that chains them:
+Beta 0.7.6 -- two validated tools plus a combined runner that chains them:
 
 - **Stenciling** -- an 11/11-part job ran unattended with zero skips. The font
   chain (the hardest piece) is fully automated: `add_font_type` (keyboard
@@ -160,6 +162,13 @@ window first so the left-anchored offset holds).
   and asks before fast-forwarding; a failed check is one log line, never a
   blocker. The GUI's font/angular fields were removed (fixed to the validated
   shop standard); the CLI keeps the flags.
+- **Installer (0.7.6)** -- `install.bat` is the one file that installs or
+  updates everything: verify py/git (it cannot install them without admin, so
+  a missing one is a clear message + exit 1), fast-forward the clone it sits
+  in (or clone fresh into `%USERPROFILE%\AutoBoost` when run standalone),
+  `pip install --user` the requirements, and best-effort create a Desktop
+  shortcut to `pythonw -m autoboost.gui`. Idempotent; a clone with local
+  changes is warned about, never clobbered. On-workstation validation pending.
 
 Notable fixes on the way: the Home parts list is virtualized, so `parts()` /
 `select_part()` scroll to enumerate/reach every row; and the angular-positions

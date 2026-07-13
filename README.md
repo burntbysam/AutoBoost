@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.5** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.6** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 AutoBoost drives the Boost GUI, unattended, across every part in a job. Two
@@ -35,6 +35,21 @@ the marking is clear of edges/holes → close → next part.
   with mouse/keyboard for the two owner-drawn dropdowns and the drawing canvas.
 
 ## Install (on the RDP workstation, no admin needed)
+
+One file does everything — first install and every later update:
+
+- **Already have the repo?** Double-click **`install.bat`** in the repo folder.
+  It fast-forwards the clone to the latest version (same semantics as the GUI's
+  update check), upgrades the dependencies (`pip --user`), and puts an
+  "AutoBoost" shortcut on the Desktop.
+- **Fresh machine?** Copy just `install.bat` over and double-click it. It
+  clones the repo into `%USERPROFILE%\AutoBoost` and does the same. Python 3
+  (the `py` launcher) and Git for Windows must already be installed — the
+  installer can't add those without admin; it detects a missing one and tells
+  you to get it from the company software portal.
+
+It's safe to re-run any time; a clone with local changes is never overwritten
+(the update is skipped with a warning instead). Manual fallback:
 
 ```
 pip install --user -r requirements.txt
@@ -189,7 +204,7 @@ Each iteration increments the patch by 0.0.1 (0.5.0 → 0.5.1 → 0.5.2). Minor
 bumps mark milestones: 0.5.9 was the last of the cutting-program line (stencil +
 cutting tools validated); 0.7.0 opened the current line; 0.7.1 fuses the two
 tools into a combined per-part runner (`full_runner`); 0.7.4 adds the control
-panel (`gui`).
+panel (`gui`); 0.7.6 adds the one-file installer (`install.bat`).
 
 ## Layout
 
@@ -199,6 +214,7 @@ panel (`gui`).
   - `full_cycle` + `full_runner` — combined stencil-then-cut (one part / whole job)
   - `gui` — tkinter control panel (Start/Cancel, live log, log save) over the same job loop
   - `updater` — launch-time version check + git fast-forward update (best-effort, never blocks)
+- `install.bat` — one-file installer/updater (fresh clone or fast-forward + `pip --user` + Desktop shortcut)
 - `tools/` — UIA probes
 - `docs/ARCHITECTURE.md` — design and module map
 - `docs/BOOST_SETUP.md` — required Boost/RDP settings
