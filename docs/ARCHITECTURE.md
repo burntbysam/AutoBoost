@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.5.8)
+# AutoBoost Architecture (Beta 0.5.9)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -83,7 +83,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.5.7)
+  __init__.py            app name + version (AutoBoost Beta 0.5.9)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
@@ -120,7 +120,7 @@ auto_id.
 
 ## Current status
 
-Beta 0.5.7 -- two validated tools:
+Beta 0.5.9 -- two validated tools:
 
 - **Stenciling** -- an 11/11-part job ran unattended with zero skips. The font
   chain (the hardest piece) is fully automated: `add_font_type` (keyboard
@@ -139,5 +139,6 @@ Versioning: each shipped iteration bumps the patch by 0.0.1 (0.5.0 -> 0.5.1).
 
 Roadmap (see README): further stencil speed gains; a cross-run "already done"
 guard; calibrate `required_clearance_px`; confirm the list-scroll direction per
-machine. (0.5.8 hardened the Cut auto-apply click: focus + maximize first, and
-refuse a too-narrow window.)
+machine. (0.5.8-0.5.9 hardened the Cut auto-apply click: force the window to
+fill the screen via Win32 ShowWindow/MoveWindow -- the UIA maximize doesn't
+resize this Qt window -- and refuse a too-narrow window.)

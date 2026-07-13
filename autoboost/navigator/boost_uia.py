@@ -536,6 +536,68 @@ class BoostUIA:
         log("cut program opened (Cut window)")
         return True
 
+    def _force_maximize(self, win) -> None:
+        """Physically maximize a top-level window.
+
+        The Qt Cut window ignores the UIA WindowPattern maximize -- it flips the
+        maximized STATE flag (the title-bar button changes to 'restore') without
+        actually resizing. So drive it with Win32 ShowWindow (the real OS
+        maximize), and if it still isn't filling the screen, set its rectangle to
+        the desktop work area outright with MoveWindow. HWNDs are passed via
+        argtypes so 64-bit handles aren't truncated. All best-effort.
+        """
+        import time
+        import ctypes
+        from ctypes import wintypes
+        from ..config import DEFAULT
+
+        try:
+            win.set_focus()
+        except Exception:
+            pass
+
+        hwnd = None
+        try:
+            hwnd = win.handle
+        except Exception:
+            hwnd = None
+        if not hwnd:                       # no native handle -> UIA best effort
+            try:
+                win.maximize()
+                time.sleep(0.4)
+            except Exception:
+                pass
+            return
+
+        user32 = ctypes.windll.user32
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.MoveWindow.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                      ctypes.c_int, ctypes.c_int, wintypes.BOOL]
+        SW_RESTORE, SW_MAXIMIZE = 9, 3
+
+        # Restore first (clears the bogus maximized-state), then maximize for real.
+        try:
+            user32.ShowWindow(hwnd, SW_RESTORE)
+            time.sleep(0.3)
+            user32.ShowWindow(hwnd, SW_MAXIMIZE)
+            time.sleep(0.4)
+        except Exception:
+            pass
+
+        # If the app still didn't resize, force the rectangle to the work area.
+        try:
+            if win.rectangle().width() < DEFAULT.cut.min_ribbon_width:
+                work = wintypes.RECT()
+                SPI_GETWORKAREA = 0x0030
+                user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(work), 0)
+                user32.ShowWindow(hwnd, SW_RESTORE)
+                time.sleep(0.2)
+                user32.MoveWindow(hwnd, work.left, work.top,
+                                  work.right - work.left, work.bottom - work.top, True)
+                time.sleep(0.3)
+        except Exception:
+            pass
+
     def click_cut_apply_technology(self, dry_run: bool = False, offset=None) -> bool:
         """Click the 'All : <machine>' auto-apply cutting-technology button on
         the Cut window's Start ribbon tab.
@@ -557,17 +619,9 @@ class BoostUIA:
             return False
         win = self.cut().wrapper_object()
 
-        # Harden: focus + maximize so the ribbon sits at its known layout. Both
-        # are idempotent (maximizing a maximized window is a no-op), best-effort.
-        try:
-            win.set_focus()
-        except Exception:
-            pass
-        try:
-            win.maximize()
-            time.sleep(0.4)
-        except Exception:
-            pass
+        # Harden: force the window to fill the screen so the ribbon is at its
+        # known left-anchored layout, whatever state it opened in.
+        self._force_maximize(win)
         time.sleep(0.2)
 
         r = win.rectangle()
