@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.5.7** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.5.8** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 AutoBoost drives the Boost GUI, unattended, across every part in a job. Two
@@ -126,9 +126,11 @@ detect work done in a *previous* run (see roadmap).
   conservative constant; calibrating it to the part-number length (so very tight
   parts are flagged up front) is planned. Verify still catches a real collision.
 - **Cut auto-apply click is positional.** The Cut ribbon is invisible to UIA, so
-  the auto-apply button is clicked by a fixed offset in the *maximized* window.
-  If the Cut window opens non-maximized/moved, the click can miss — hardening
-  (normalize the window first, or scale the offset) is planned.
+  the auto-apply button is clicked by a fixed offset. As of 0.5.8 the click
+  focuses + maximizes the Cut window first (the ribbon is left-anchored, so the
+  offset then holds regardless of screen width) and refuses to click a window
+  narrower than `config.cut.min_ribbon_width`. Remaining edge: a genuinely
+  different ribbon skin/resolution would still need the offset re-tuned.
 - **List scroll assumes wheel-up = toward top.** `parts()`/`select_part()`
   wheel-scroll the virtualized Home list; if a machine scrolls the other way,
   flip the sign in `BoostUIA._scroll_list`.

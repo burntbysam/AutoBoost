@@ -111,6 +111,10 @@ class CutConfig:
     after_save_s: float = 1.0
     # Seconds to wait for the Cut window to close back to Home after Alt+F4.
     close_timeout_s: int = 10
+    # Minimum Cut-window width (px) for the ribbon to be at its normal
+    # left-anchored layout. Below this the ribbon groups may collapse and the
+    # positional apply-click would be unreliable, so we refuse instead of miss.
+    min_ribbon_width: int = 1000
 
 
 @dataclass

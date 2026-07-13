@@ -541,36 +541,51 @@ class BoostUIA:
         the Cut window's Start ribbon tab.
 
         The Qtitan ribbon exposes no buttons to UIA, so this is a positional
-        click within the maximized Cut window (offset from its top-left, in
-        config.cut.apply_button_offset). dry_run just moves the cursor there so
-        the target can be eyeballed without clicking. Records the point in
-        self.last_value.
-
-        TODO (hardening): make this fool-proof against a non-maximized / oddly
-        placed Cut window -- e.g. maximize it first, or scale the offset by the
-        window size -- so the positional click can't miss.
+        click (offset from the window's top-left, config.cut.apply_button_offset).
+        To keep it fool-proof against a window that opened non-maximized or
+        moved, we focus + maximize the Cut window first (the ribbon is
+        left-anchored, so the offset then holds regardless of screen width) and
+        refuse to click a window too narrow for a normal ribbon layout. dry_run
+        just moves the cursor there. Records the point in self.last_value.
         """
         import time
         import pyautogui
         from ..config import DEFAULT
+        cut = DEFAULT.cut
         if not self.has_cut():
             self.last_value = "<Cut window not open>"
             return False
         win = self.cut().wrapper_object()
+
+        # Harden: focus + maximize so the ribbon sits at its known layout. Both
+        # are idempotent (maximizing a maximized window is a no-op), best-effort.
         try:
             win.set_focus()
         except Exception:
             pass
-        time.sleep(0.3)
+        try:
+            win.maximize()
+            time.sleep(0.4)
+        except Exception:
+            pass
+        time.sleep(0.2)
+
         r = win.rectangle()
-        ox, oy = offset or DEFAULT.cut.apply_button_offset
+        if r.width() < cut.min_ribbon_width:
+            self.last_value = (f"<Cut window only {r.width()}px wide "
+                               f"(< {cut.min_ribbon_width}); ribbon may be "
+                               f"collapsed -- refusing the positional click>")
+            return False
+
+        ox, oy = offset or cut.apply_button_offset
         x, y = r.left + int(ox), max(0, r.top) + int(oy)
         if dry_run:
             pyautogui.moveTo(x, y)
-            self.last_value = f"<dry-run: cursor at ({x},{y}); no click>"
+            self.last_value = (f"<dry-run: cursor at ({x},{y}); "
+                               f"win={r.width()}x{r.height()}; no click>")
             return True
         pyautogui.click(x, y)
-        self.last_value = f"clicked ({x},{y})"
+        self.last_value = f"clicked ({x},{y}); win={r.width()}x{r.height()}"
         return True
 
     def finish_cut_program(self, log=print) -> bool:

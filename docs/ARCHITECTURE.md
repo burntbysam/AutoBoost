@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.5.7)
+# AutoBoost Architecture (Beta 0.5.8)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -127,7 +127,8 @@ Beta 0.5.7 -- two validated tools:
   through the property selector) and `set_font_by_drag` (held mouse-drag on the
   owner-drawn value list, the only gesture that control honours).
 - **Cutting programs** -- a full 17-part job ran end to end. The Home controls
-  are UIA (`Part.Detail.CutSolutions.*`); the Cut window's ribbon is positional.
+  are UIA (`Part.Detail.CutSolutions.*`); the Cut window's ribbon is positional (the click focuses + maximizes the
+window first so the left-anchored offset holds).
 
 Notable fixes on the way: the Home parts list is virtualized, so `parts()` /
 `select_part()` scroll to enumerate/reach every row; and the angular-positions
@@ -137,5 +138,6 @@ as the default) rather than that it changed.
 Versioning: each shipped iteration bumps the patch by 0.0.1 (0.5.0 -> 0.5.1).
 
 Roadmap (see README): further stencil speed gains; a cross-run "already done"
-guard; calibrate `required_clearance_px`; harden the Cut auto-apply click
-against a non-maximized window; confirm the list-scroll direction per machine.
+guard; calibrate `required_clearance_px`; confirm the list-scroll direction per
+machine. (0.5.8 hardened the Cut auto-apply click: focus + maximize first, and
+refuse a too-narrow window.)
