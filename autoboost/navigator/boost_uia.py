@@ -323,6 +323,34 @@ class BoostUIA:
         self.last_value = f"<could not set angular positions to {value!r}>"
         return False
 
+    def set_cut_angular_last(self) -> bool:
+        """Select the LAST option in the 'Allowed angular positions (Job)' combo
+        by keyboard: open -> End -> Enter.
+
+        The wanted value ('0°;90°...') is the last item, and picking it by
+        position avoids matching that awkward string (trailing '...', and the
+        degree glyphs are easy to mis-encode). Records the read-back in
+        self.last_value.
+        """
+        import time
+        from pywinauto.keyboard import send_keys
+        combo = self._angular_combo()
+        if combo is None:
+            self.last_value = "<angular-positions (Job) combo not found>"
+            return False
+        try:
+            combo.click_input()          # open the list
+            time.sleep(0.4)
+            send_keys("{END}")           # jump to the last option
+            time.sleep(0.2)
+            send_keys("{ENTER}")         # commit
+            time.sleep(0.3)
+            self.last_value = _value(combo) or "<last option>"
+            return True
+        except Exception as exc:         # noqa: BLE001
+            self.last_value = f"<angular last-select failed: {exc!r}>"
+            return False
+
     def find_cut_open_button(self):
         """The 'Open' button on the newly-created cutting-program row.
 
@@ -359,8 +387,12 @@ class BoostUIA:
         self.last_value = "<Cut window did not open>"
         return False
 
-    def create_cut_program(self, angular: str = "0°;90°", log=print) -> bool:
+    def create_cut_program(self, angular: str | None = None, log=print) -> bool:
         """New cutting program -> set angular positions -> open the Cut window.
+
+        angular=None (default) selects the LAST option in the combo ('0°;90°...')
+        by keyboard, which is the wanted value and dodges the awkward string.
+        Pass an explicit value (e.g. '0°;90°') to select it by name instead.
 
         Assumes the target part is already selected in the Home list. Each step
         logs so a failure points at one action.
@@ -375,10 +407,16 @@ class BoostUIA:
         log(f"clicked Cutting Programs 'New' ({how})")
         time.sleep(1.0)                   # the new Cut1 row + settings appear
 
-        if not self.set_cut_angular_positions(angular):
+        if angular is None:
+            ok = self.set_cut_angular_last()
+            wanted = "(last option)"
+        else:
+            ok = self.set_cut_angular_positions(angular)
+            wanted = angular
+        if not ok:
             log(f"set angular positions -> False ({self.last_value})")
             return False
-        log(f"set '{self.ANGULAR_JOB_LABEL}' -> {angular}")
+        log(f"set '{self.ANGULAR_JOB_LABEL}' -> {self.last_value} {wanted}")
         time.sleep(0.4)
 
         if not self.open_cut_program():
@@ -1045,9 +1083,10 @@ def main() -> int:
     parser.add_argument("--new-cut", action="store_true",
                         help="Create a cutting program on the selected part: "
                              "New -> set angular positions -> open the Cut window.")
-    parser.add_argument("--angular", default="0°;90°",
-                        help="Value for 'Allowed angular positions (Job)' "
-                             "(default: '0°;90°').")
+    parser.add_argument("--angular", default=None,
+                        help="Value for 'Allowed angular positions (Job)'. "
+                             "Omit to select the LAST option ('0°;90°...') by "
+                             "keyboard; pass e.g. '0°;90°' to select by name.")
     args = parser.parse_args()
 
     if args.locate_cut:

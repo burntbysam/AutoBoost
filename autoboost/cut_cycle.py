@@ -30,7 +30,7 @@ from .navigator.boost_uia import BoostUIA
 
 
 def create_cut_program(part_name: str | None = None,
-                       angular: str = "0°;90°",
+                       angular: str | None = None,
                        log=print,
                        boost: BoostUIA | None = None) -> bool:
     """Select `part_name` (or use the current selection) and create + open a
@@ -57,8 +57,9 @@ def main() -> int:
         description="Create a cutting program for a part from the Home screen.")
     ap.add_argument("--part", default=None,
                     help="Part to select first (default: the current selection).")
-    ap.add_argument("--angular", default="0°;90°",
-                    help="'Allowed angular positions (Job)' value (default '0°;90°').")
+    ap.add_argument("--angular", default=None,
+                    help="'Allowed angular positions (Job)' value. Omit to pick "
+                         "the LAST option ('0°;90°...'); pass e.g. '0°;90°' by name.")
     ap.add_argument("--locate", action="store_true",
                     help="Read-only: report the cutting-program controls and "
                          "their auto_ids. Clicks nothing.")
