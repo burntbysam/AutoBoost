@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.2)
+# AutoBoost Architecture (Beta 0.7.3)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -88,7 +88,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.2)
+  __init__.py            app name + version (AutoBoost Beta 0.7.3)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
@@ -127,7 +127,7 @@ auto_id.
 
 ## Current status
 
-Beta 0.7.2 -- two validated tools plus a combined runner that chains them:
+Beta 0.7.3 -- two validated tools plus a combined runner that chains them:
 
 - **Stenciling** -- an 11/11-part job ran unattended with zero skips. The font
   chain (the hardest piece) is fully automated: `add_font_type` (keyboard

@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.2** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.3** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 AutoBoost drives the Boost GUI, unattended, across every part in a job. Two
@@ -145,6 +145,12 @@ detect work done in a *previous* run (see roadmap).
 - **Clearance floor.** The placement minimum (`required_clearance_px`) is a
   conservative constant; calibrating it to the part-number length (so very tight
   parts are flagged up front) is planned. Verify still catches a real collision.
+- **Verify is advisory, not gating.** The post-save check logs PASS/FAIL but
+  does not skip a part (placement already guaranteed clearance). As of 0.7.3 it
+  no longer prints a false FAIL when the before/after diff catches only a tiny
+  sliver of change (`text_px < 60` and ~all of it at an edge) -- that's reported
+  as "inconclusive, assumed clear" instead. A genuine large marking landing
+  outside the body still FAILs.
 - **Cut auto-apply click is positional.** The Cut ribbon is invisible to UIA, so
   the auto-apply button is clicked by a fixed offset. The click first forces the
   Cut window to fill the screen via Win32 `ShowWindow`/`MoveWindow` (the UIA
