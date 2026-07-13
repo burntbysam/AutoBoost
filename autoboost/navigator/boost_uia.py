@@ -449,6 +449,10 @@ class BoostUIA:
         config.cut.apply_button_offset). dry_run just moves the cursor there so
         the target can be eyeballed without clicking. Records the point in
         self.last_value.
+
+        TODO (hardening): make this fool-proof against a non-maximized / oddly
+        placed Cut window -- e.g. maximize it first, or scale the offset by the
+        window size -- so the positional click can't miss.
         """
         import time
         import pyautogui
@@ -472,6 +476,55 @@ class BoostUIA:
         pyautogui.click(x, y)
         self.last_value = f"clicked ({x},{y})"
         return True
+
+    def finish_cut_program(self, log=print) -> bool:
+        """Complete an open Cut window: auto-apply the cutting technology, wait
+        for it to compute, dismiss the completion notice (Esc), save (Ctrl+S),
+        and close the window (Alt+F4) back to Home.
+
+        Assumes a Cut window is already open (from create_cut_program). Each
+        step logs so a failure points at one action.
+        """
+        import time
+        import pyautogui
+        from ..config import DEFAULT
+        cut = DEFAULT.cut
+        if not self.has_cut():
+            self.last_value = "<Cut window not open>"
+            log("no Cut window open")
+            return False
+
+        # 1. Auto-apply cutting technology (focuses the Cut window + clicks).
+        if not self.click_cut_apply_technology():
+            log(f"apply technology -> False ({self.last_value})")
+            return False
+        log("clicked auto-apply cutting technology")
+
+        # 2. Wait for the data to compute; the completion notice then appears.
+        time.sleep(cut.apply_wait_s)
+
+        # 3. Dismiss the completion notice.
+        pyautogui.press("esc")
+        time.sleep(0.4)
+        log("dismissed completion notice (esc)")
+
+        # 4. Save the cutting program.
+        pyautogui.hotkey("ctrl", "s")
+        time.sleep(cut.after_save_s)
+        log("saved (ctrl+s)")
+
+        # 5. Close the Cut window (Alt+F4) -> back to Home. We saved first, so
+        #    no unsaved-changes prompt should appear.
+        pyautogui.hotkey("alt", "f4")
+        self.reset()                      # the Cut window is going away
+        for _ in range(cut.close_timeout_s):
+            if self.has_home() and not self.has_cut():
+                log("closed Cut window (alt+f4) -> Home")
+                return True
+            time.sleep(1)
+        self.last_value = "<Cut window did not close back to Home>"
+        log(self.last_value)
+        return False
 
     def locate_cut_controls(self) -> str:
         """Read-only report of the cutting-program controls and their auto_ids.
