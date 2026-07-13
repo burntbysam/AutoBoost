@@ -124,14 +124,18 @@ class BoostUIA:
 
     # -- HomeZone: part list ------------------------------------------------
 
-    def parts(self) -> list[dict]:
-        """Return [{name, raw, item}] for every part in the HomeZone list."""
+    def _result_list(self):
+        """Wrapper for the HomeZone parts list (auto_id 'List.ResultList')."""
+        try:
+            return self.home().child_window(auto_id="List.ResultList").wrapper_object()
+        except Exception:
+            return self.home().wrapper_object()
+
+    @staticmethod
+    def _scan_visible_parts(container) -> list[dict]:
+        """[{name, raw, item}] for the ListItems currently realized in the tree."""
         out: list[dict] = []
-        home = self.home().wrapper_object()
-        for item in home.descendants(control_type="ListItem"):
-            if not _auto_id(item) and "ResultList" not in _text(item):
-                # ListItems in the result list carry name "Name: <part>, ID: ...".
-                pass
+        for item in container.descendants(control_type="ListItem"):
             name, raw = None, None
             for t in item.descendants(control_type="Text"):
                 aid = _auto_id(t)
@@ -143,12 +147,78 @@ class BoostUIA:
                 out.append({"name": name, "raw": raw, "item": item})
         return out
 
+    def _scroll_list(self, clicks: int) -> None:
+        """Wheel-scroll over the parts list (does not change the selection).
+        clicks>0 scrolls up, <0 scrolls down."""
+        import pyautogui
+        r = self._result_list().rectangle()
+        pyautogui.moveTo((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+        pyautogui.scroll(clicks)
+
+    def parts(self) -> list[dict]:
+        """Every part in the Home list. The list is virtualized (off-screen rows
+        aren't in the UIA tree), so scroll from the top collecting new names
+        until the set stops growing. Item wrappers may go stale once scrolled
+        away -- use select_part(name), which re-finds the row before clicking."""
+        import time
+        lst = self._result_list()
+        by_name: dict[str, dict] = {}
+        order: list[str] = []
+
+        def collect():
+            for p in self._scan_visible_parts(lst):
+                if p["name"] not in by_name:
+                    by_name[p["name"]] = p
+                    order.append(p["name"])
+
+        collect()
+        try:
+            self._scroll_list(2000)          # jump to the top
+            time.sleep(0.2)
+            collect()
+            stagnant = 0
+            for _ in range(60):
+                before = len(by_name)
+                self._scroll_list(-250)      # step down
+                time.sleep(0.12)
+                collect()
+                stagnant = 0 if len(by_name) > before else stagnant + 1
+                if stagnant >= 4:            # several steps, no new rows -> bottom
+                    break
+        except Exception:
+            pass
+        return [by_name[n] for n in order]
+
     def select_part(self, name: str) -> bool:
-        """Click the part whose Description equals `name`. Returns success."""
-        for p in self.parts():
-            if p["name"] == name:
-                p["item"].click_input()
+        """Click the part whose Description equals `name`, scrolling the
+        (virtualized) list to bring it into view if needed. Returns success."""
+        import time
+        lst = self._result_list()
+
+        def try_click() -> bool:
+            for p in self._scan_visible_parts(lst):
+                if p["name"] == name:
+                    try:
+                        p["item"].click_input()
+                        return True
+                    except Exception:
+                        return False
+            return False
+
+        if try_click():
+            return True
+        try:
+            self._scroll_list(2000)          # to the top, then step down
+            time.sleep(0.2)
+            if try_click():
                 return True
+            for _ in range(60):
+                self._scroll_list(-250)
+                time.sleep(0.12)
+                if try_click():
+                    return True
+        except Exception:
+            pass
         return False
 
     def open_part_in_design(self, name: str | None = None, timeout: int = 25) -> bool:
@@ -333,14 +403,15 @@ class BoostUIA:
         return False
 
     def set_cut_angular_last(self) -> bool:
-        """Select the LAST option ('0°;90°...') in the '(Job)' combo.
+        """Ensure the '(Job)' combo is on the LAST option ('0°;90°...').
 
-        Uses the SAME native combo.select() that reliably set '0°;90°' -- the
-        only thing that ever needed to change was the target string, not the
-        method (the item_texts/keyboard detour was the regression). Selects the
-        dotted last value by string (trying a plain '...' and an ellipsis glyph),
-        then by index as a fallback, and confirms via read-back so a miss returns
-        False. Records the committed value in self.last_value.
+        Success is defined as the value BEING the last option, not as it
+        CHANGING -- Boost remembers the last-used angular value as the default
+        for new programs, so after the first part the combo often already reads
+        '0°;90°...', and an is-it-different test would wrongly skip it. The last
+        option is the dotted 'more' entry (ends in '...'); we accept that, else
+        select it by string (proven select() path) or by index. Records the
+        value in self.last_value.
         """
         import time
         combo = self._angular_combo()
@@ -351,21 +422,28 @@ class BoostUIA:
         def current() -> str:
             return (_value(combo) or "").strip()
 
-        before = current()
+        def on_last(v: str) -> bool:
+            return v.endswith("...") or v.endswith("…")
 
-        # 1. Select the dotted last value by string (the proven select() path).
+        # Already on the last option (Boost remembered it) -> done.
+        val = current()
+        if on_last(val):
+            self.last_value = val
+            return True
+
+        # Select the dotted last value by string (plain '...' and ellipsis glyph).
         for cand in ("0°;90°...", "0°;90°…"):
             try:
                 combo.select(cand)
                 time.sleep(0.4)
-                after = current()
-                if after and after != before:
-                    self.last_value = after
+                val = current()
+                if on_last(val):
+                    self.last_value = val
                     return True
             except Exception:
                 continue
 
-        # 2. Fallback: select the last item by index (uia combo has item_count()).
+        # Fallback: select the last item by index (uia combo has item_count()).
         try:
             n = combo.item_count()
         except Exception:
@@ -374,14 +452,14 @@ class BoostUIA:
             try:
                 combo.select(n - 1)
                 time.sleep(0.4)
-                after = current()
-                if after and after != before:
-                    self.last_value = after
+                val = current()
+                if on_last(val) or (val and val != "0°"):
+                    self.last_value = val
                     return True
             except Exception:
                 pass
 
-        self.last_value = f"<angular unchanged: still {current()!r}>"
+        self.last_value = f"<angular not on last option: {current()!r}>"
         return False
 
     def find_cut_open_button(self):
