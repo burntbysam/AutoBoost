@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.5.1)
+# AutoBoost Architecture (Beta 0.5.7)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -83,16 +83,20 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.5.1)
+  __init__.py            app name + version (AutoBoost Beta 0.5.7)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
     placement.py         [built] safe placement via distance transform
     verify.py            [built] post-save collision check (clean/after diff)
   navigator/
-    boost_uia.py         [built] UIA driver: parts list, open, dims, font chain
-  part_cycle.py          [built] one-part sequence (place -> font -> save -> verify)
-  runner.py              [built] job loop (open -> cycle -> close -> next)
+    boost_uia.py         [built] UIA driver: parts list (scroll-aware), open,
+                                 dims, font chain, cutting-program controls
+  part_cycle.py          [built] stencil: one part (place -> font -> save -> verify)
+  runner.py              [built] stencil job loop (open -> cycle -> close -> next)
+  cut_cycle.py           [built] cutting: one part (new -> angular -> open ->
+                                 apply -> save -> close)
+  cut_runner.py          [built] cutting job loop over the Home list
 tools/
   probe_uia.py           [built] dump Boost's UIA tree
   probe_open_dropdown.py [built] open + dump an owner-drawn dropdown
@@ -101,17 +105,37 @@ docs/
   BOOST_SETUP.md         required Boost/RDP settings for reliable vision
 ```
 
+## The Cut window (a second opaque surface)
+
+The Design view is DotNetBar/WinForms; the **Cut** window
+(`<part> - TruTops Boost - Cut`) is a different beast -- a Qt app
+(`Qtitan::RibbonBar`, `TnQtWidgets`). Its **ribbon exposes no buttons to UIA**
+(the probe's RibbonBar node has zero button children), so the auto-apply
+cutting-technology button is a **positional click** in the maximized window
+(`config.cut.apply_button_offset`), and the rest of the finish (dismiss notice,
+save, close) is keyboard -- the same "chrome is opaque -> drive it by position"
+situation as the drawing canvas. The Home-side cutting-program controls
+(`Part.Detail.CutSolutions.*`), by contrast, are ordinary WPF UIA and driven by
+auto_id.
+
 ## Current status
 
-Beta 0.5.1 -- feature-complete and validated by a full 11/11-part job run
-unattended with zero skips. The font chain (the hardest piece) is fully
-automated: `add_font_type` (keyboard through the property selector) and
-`set_font_by_drag` (held mouse-drag on the owner-drawn value list, the only
-gesture that control honours). 0.5.1 adds the per-run duplicate guard and trims
-the settle delays.
+Beta 0.5.7 -- two validated tools:
+
+- **Stenciling** -- an 11/11-part job ran unattended with zero skips. The font
+  chain (the hardest piece) is fully automated: `add_font_type` (keyboard
+  through the property selector) and `set_font_by_drag` (held mouse-drag on the
+  owner-drawn value list, the only gesture that control honours).
+- **Cutting programs** -- a full 17-part job ran end to end. The Home controls
+  are UIA (`Part.Detail.CutSolutions.*`); the Cut window's ribbon is positional.
+
+Notable fixes on the way: the Home parts list is virtualized, so `parts()` /
+`select_part()` scroll to enumerate/reach every row; and the angular-positions
+step checks the value IS the last option (Boost remembers the last-used value
+as the default) rather than that it changed.
 
 Versioning: each shipped iteration bumps the patch by 0.0.1 (0.5.0 -> 0.5.1).
 
-Roadmap (see README): further speed gains (font-chain screenshots/retries), a
-cross-run "already stenciled" guard, and calibrate `required_clearance_px` to
-the part-number length.
+Roadmap (see README): further stencil speed gains; a cross-run "already done"
+guard; calibrate `required_clearance_px`; harden the Cut auto-apply click
+against a non-maximized window; confirm the list-scroll direction per machine.

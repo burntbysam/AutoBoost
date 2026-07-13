@@ -1,15 +1,22 @@
 # AutoBoost
 
-**AutoBoost Beta 0.5.1** — automated part-number stenciling for TRUMPF TruTops
-Boost.
+**AutoBoost Beta 0.5.7** — GUI automation for repetitive per-part chores in
+TRUMPF TruTops Boost.
 
-AutoBoost drives the Boost GUI to place a correctly-fonted (EasyType-L=10mm)
-part-number engraving on every part in a job — unattended. You select a job,
-launch it, walk away, and come back to every part stenciled.
+AutoBoost drives the Boost GUI, unattended, across every part in a job. Two
+tools today:
 
-> **Status:** Beta. A full 11/11-part job completed unattended with zero
-> skips. Runs on the Windows/RDP workstation where Boost is visible — this repo
-> is the codebase; the bot executes there.
+1. **Part-number stenciling** — place a correctly-fonted (EasyType-L=10mm)
+   part-number engraving on each part.
+2. **Cutting-program creation** — create + apply a cutting program on each
+   part (New → set angular positions → auto-apply technology → save → close).
+
+You put Boost on the Home screen, launch a runner, walk away, and come back to
+a finished job.
+
+> **Status:** Beta. The stencil job ran 11/11 unattended; the cutting job ran a
+> full 17-part list. Runs on the Windows/RDP workstation where Boost is visible
+> — this repo is the codebase; the bot executes there.
 
 ## What it does, per part
 
@@ -37,15 +44,28 @@ first — the vision is tuned to a crisp, 100%-scale, maximized Boost window.
 
 ## Run a job
 
-Put Boost on the **Home** screen, then:
+Put Boost on the **Home** screen, then run one of the two job runners. Each
+counts down 5 s, processes every part, and prints a `done/skipped` tally.
+**Kill switch:** Ctrl+C, or hold `q` (needs the `keyboard` package).
 
+**Part-number stenciling:**
 ```
 py -m autoboost.runner                       # every part in the Home list
 py -m autoboost.runner --parts 8604300I-1 8604301I-1   # just these
 py -m autoboost.runner --no-save --no-close  # dry mechanics (no save/close)
 ```
-It counts down 5 s, then processes each part and prints a `done/skipped` tally.
-**Kill switch:** Ctrl+C, or hold `q` (needs the `keyboard` package).
+
+**Cutting-program creation:**
+```
+py -m autoboost.cut_runner                   # every part in the Home list
+py -m autoboost.cut_runner --parts 8604300I-1 8604301I-1
+py -m autoboost.cut_runner --no-finish       # open each Cut window only
+```
+Per part: create a cutting program → set `Allowed angular positions (Job)` to
+the last option (`0°;90°...`) → open the Cut window → click auto-apply
+technology → save → close back to Home. The Home half is UIA; the Cut window is
+a Qt app whose ribbon is invisible to UIA, so the auto-apply button is a
+positional click (`config.cut.apply_button_offset`) and the finish is keyboard.
 
 ## Run / tune individual pieces
 
@@ -67,6 +87,12 @@ py -m autoboost.vision.verify before.png after.png # writes after.verify.png
 
 # UIA tree diagnostics:
 py tools/probe_uia.py --find barLeftDockSite --out dump.txt
+
+# Cutting program, one part (from Home):
+py -m autoboost.cut_cycle --part 8604300I-1        # full create + apply + close
+py -m autoboost.cut_cycle --part 8604300I-1 --no-finish   # open Cut window only
+py -m autoboost.cut_cycle --locate                 # read-only: report controls
+py -m autoboost.navigator.boost_uia --cut-apply --dry-run  # hover the apply btn
 ```
 
 ## Configuration
@@ -81,12 +107,12 @@ py tools/probe_uia.py --find barLeftDockSite --out dump.txt
 
 ## Duplicate guard
 
-If the same exact part number appears more than once in a run's sequence,
-AutoBoost stencils it **once** — the first occurrence — and skips every
-recurrence without opening it (so a duplicate is never double-stamped). Each
-skipped duplicate is listed in a `*** FLAG` block in the end-of-run summary so
-you can reconcile the job. This is a name check against the Home list only; it
-does not detect a part that was stenciled in a *previous* run (see roadmap).
+If the same exact part number appears more than once in a run's sequence, both
+runners process it **once** — the first occurrence — and skip every recurrence
+without opening it (no double-stamp / no second cutting program). Each skipped
+duplicate is listed in a `*** FLAG` block in the end-of-run summary so you can
+reconcile the job. This is a name check against the Home list only; it does not
+detect work done in a *previous* run (see roadmap).
 
 ## Known limitations / roadmap
 
@@ -99,6 +125,13 @@ does not detect a part that was stenciled in a *previous* run (see roadmap).
 - **Clearance floor.** The placement minimum (`required_clearance_px`) is a
   conservative constant; calibrating it to the part-number length (so very tight
   parts are flagged up front) is planned. Verify still catches a real collision.
+- **Cut auto-apply click is positional.** The Cut ribbon is invisible to UIA, so
+  the auto-apply button is clicked by a fixed offset in the *maximized* window.
+  If the Cut window opens non-maximized/moved, the click can miss — hardening
+  (normalize the window first, or scale the offset) is planned.
+- **List scroll assumes wheel-up = toward top.** `parts()`/`select_part()`
+  wheel-scroll the virtualized Home list; if a machine scrolls the other way,
+  flip the sign in `BoostUIA._scroll_list`.
 
 ## Versioning
 
@@ -106,8 +139,9 @@ Every shipped iteration increments the patch by 0.0.1 (0.5.0 → 0.5.1 → 0.5.2
 
 ## Layout
 
-- `autoboost/` — package (config, logging, `vision/`, `navigator/`,
-  `part_cycle`, `runner`)
+- `autoboost/` — package (config, logging, `vision/`, `navigator/`)
+  - `part_cycle` + `runner` — part-number stenciling (one part / whole job)
+  - `cut_cycle` + `cut_runner` — cutting-program creation (one part / whole job)
 - `tools/` — UIA probes
 - `docs/ARCHITECTURE.md` — design and module map
 - `docs/BOOST_SETUP.md` — required Boost/RDP settings
