@@ -211,12 +211,12 @@ class BoostUIA:
     # Part.Detail.CutSolutions.AddSolution -- distinct from the Bending row's
     # Part.Detail.BendSolutions.AddSolution.
     CUT_NEW_AUTOIDS = ("Part.Detail.CutSolutions.AddSolution",)
-    # The program-row 'Open' only exists after 'New' is clicked, so its auto_id
-    # is not yet pinned; these follow the CutSolutions convention and the
-    # positional fallback (top-most 'Open' below the header) covers a miss.
-    CUT_OPEN_AUTOIDS = ("Part.Detail.CutSolutions.Open",
-                        "Part.Detail.CutSolutions.OpenSolution",
-                        "Part.Detail.CutSolutions.Solution.Open")
+    # Pinned from a post-New locate: a freshly created program is 'Cut1', so its
+    # row 'Open' and its '(Job)' combo carry these ids. The positional/label
+    # fallbacks still cover a differently-named program (Cut2, ...).
+    CUT_OPEN_AUTOIDS = ("Part.Detail.CutSolutions.List.Cut1.OpenSolution",
+                        "Part.Detail.CutSolutions.Open")
+    ANGULAR_JOB_AUTOID = "Part.Detail.CutSolutions.List.Cut1.Detail.PermittedNestingOrientations"
     ANGULAR_JOB_LABEL = "Allowed angular positions (Job)"
 
     def _home_wrapper(self):
@@ -274,8 +274,17 @@ class BoostUIA:
         return (best, "positional") if best else (None, "no 'New' on the Cutting Programs row")
 
     def _angular_combo(self):
-        """The ComboBox directly under the 'Allowed angular positions (Job)'
-        label (distinct from the Design section's 'Allowed angular positions')."""
+        """The '(Job)' angular-positions ComboBox (distinct from the Design
+        section's 'Allowed angular positions')."""
+        # Prefer the pinned auto_id (fast, unambiguous).
+        try:
+            c = self.home().child_window(auto_id=self.ANGULAR_JOB_AUTOID,
+                                         control_type="ComboBox")
+            if c.exists(timeout=1):
+                return c.wrapper_object()
+        except Exception:
+            pass
+        # Fallback: the ComboBox directly under the '(Job)' label.
         home = self._home_wrapper()
         labels = [t for t in home.descendants(control_type="Text")
                   if _text(t) == self.ANGULAR_JOB_LABEL]
@@ -324,19 +333,16 @@ class BoostUIA:
         return False
 
     def set_cut_angular_last(self) -> bool:
-        """Select the LAST option ('0°;90°...') in the 'Allowed angular positions
-        (Job)' combo, verifying by read-back.
+        """Select the LAST option ('0°;90°...') in the '(Job)' combo.
 
-        Primary path replicates the working manual gesture -- open the list,
-        End to the last option, Enter to commit -- using OS-level keystrokes
-        (pyautogui), because pywinauto's posted send_keys don't reach the WPF
-        dropdown popup (that was the earlier failure). Native UIA select() is the
-        fallback. Every path confirms the value actually changed, so a silent
-        miss returns False instead of a false success. Records the committed
-        value in self.last_value.
+        Uses the SAME native combo.select() that reliably set '0°;90°' -- the
+        only thing that ever needed to change was the target string, not the
+        method (the item_texts/keyboard detour was the regression). Selects the
+        dotted last value by string (trying a plain '...' and an ellipsis glyph),
+        then by index as a fallback, and confirms via read-back so a miss returns
+        False. Records the committed value in self.last_value.
         """
         import time
-        import pyautogui
         combo = self._angular_combo()
         if combo is None:
             self.last_value = "<angular-positions (Job) combo not found>"
@@ -347,36 +353,35 @@ class BoostUIA:
 
         before = current()
 
-        # Primary: open the list and drive it by OS-level keys (the manual way).
-        try:
-            combo.click_input()               # open the dropdown
-            time.sleep(0.5)
-            pyautogui.press("end")            # highlight the last option
-            time.sleep(0.25)
-            pyautogui.press("enter")          # commit
-            time.sleep(0.5)
-            after = current()
-            if after and after != before:
-                self.last_value = after
-                return True
-        except Exception:
-            after = before
-
-        # Fallback: native UIA select of the last item by index.
-        try:
-            items = combo.item_texts()
-            if items:
-                combo.select(len(items) - 1)
+        # 1. Select the dotted last value by string (the proven select() path).
+        for cand in ("0°;90°...", "0°;90°…"):
+            try:
+                combo.select(cand)
                 time.sleep(0.4)
                 after = current()
                 if after and after != before:
                     self.last_value = after
                     return True
-        except Exception as exc:              # noqa: BLE001
-            self.last_value = f"<angular last-select error: {exc!r}>"
-            return False
+            except Exception:
+                continue
 
-        self.last_value = f"<angular unchanged: still {after!r}>"
+        # 2. Fallback: select the last item by index (uia combo has item_count()).
+        try:
+            n = combo.item_count()
+        except Exception:
+            n = 0
+        if n:
+            try:
+                combo.select(n - 1)
+                time.sleep(0.4)
+                after = current()
+                if after and after != before:
+                    self.last_value = after
+                    return True
+            except Exception:
+                pass
+
+        self.last_value = f"<angular unchanged: still {current()!r}>"
         return False
 
     def find_cut_open_button(self):
@@ -568,10 +573,12 @@ class BoostUIA:
             lines.append(f"  ComboBox auto_id={_auto_id(c)!r} value={_value(c)!r} "
                          f"rect=({r.left},{r.top},{r.right},{r.bottom})")
             if "angular" in _auto_id(c).lower() or "orientation" in _auto_id(c).lower():
-                try:
-                    lines.append(f"       items={c.item_texts()!r}")
-                except Exception as exc:
-                    lines.append(f"       items=<unreadable: {exc!r}>")
+                for label, getter in (("texts", c.texts),
+                                      ("item_count", c.item_count)):
+                    try:
+                        lines.append(f"       {label}={getter()!r}")
+                    except Exception as exc:
+                        lines.append(f"       {label}=<unreadable: {exc!r}>")
         return "\n".join(lines)
 
     # -- Design: dimensions & property grid ---------------------------------
