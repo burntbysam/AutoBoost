@@ -104,9 +104,9 @@ class CutConfig:
     # 'All : <machine>' auto-apply cutting-technology button on the Start tab.
     apply_button_offset: tuple = (291, 85)
     # After clicking auto-apply, how long the cutting data takes to compute
-    # before the completion notice appears (observed 0.5-2.5s; wait the upper
-    # bound so slower parts still finish before we Esc/save).
-    apply_wait_s: float = 2.5
+    # before the completion notice appears (observed 0.5-2.5s; wait a little
+    # past the upper bound so slower parts still finish before we Esc/save).
+    apply_wait_s: float = 3.0
     # Settle after Ctrl+S before Alt+F4 closes the Cut window.
     after_save_s: float = 1.0
     # Seconds to wait for the Cut window to close back to Home after Alt+F4.

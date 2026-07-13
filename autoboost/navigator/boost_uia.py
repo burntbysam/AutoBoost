@@ -324,47 +324,60 @@ class BoostUIA:
         return False
 
     def set_cut_angular_last(self) -> bool:
-        """Select the LAST option in the 'Allowed angular positions (Job)' combo.
+        """Select the LAST option ('0°;90°...') in the 'Allowed angular positions
+        (Job)' combo, verifying by read-back.
 
-        Uses the same native UIA select() that reliably set '0°;90°' before,
-        but reads the combo's own option list and selects the last entry by its
-        exact text -- so we get '0°;90°...' without hardcoding that awkward
-        string (trailing '...', degree glyphs). Records the read-back in
-        self.last_value.
+        Primary path replicates the working manual gesture -- open the list,
+        End to the last option, Enter to commit -- using OS-level keystrokes
+        (pyautogui), because pywinauto's posted send_keys don't reach the WPF
+        dropdown popup (that was the earlier failure). Native UIA select() is the
+        fallback. Every path confirms the value actually changed, so a silent
+        miss returns False instead of a false success. Records the committed
+        value in self.last_value.
         """
         import time
+        import pyautogui
         combo = self._angular_combo()
         if combo is None:
             self.last_value = "<angular-positions (Job) combo not found>"
             return False
+
+        def current() -> str:
+            return (_value(combo) or "").strip()
+
+        before = current()
+
+        # Primary: open the list and drive it by OS-level keys (the manual way).
         try:
-            items = combo.item_texts()   # the enumerable option strings
+            combo.click_input()               # open the dropdown
+            time.sleep(0.5)
+            pyautogui.press("end")            # highlight the last option
+            time.sleep(0.25)
+            pyautogui.press("enter")          # commit
+            time.sleep(0.5)
+            after = current()
+            if after and after != before:
+                self.last_value = after
+                return True
         except Exception:
-            items = []
-        if items:
-            last = items[-1]
-            for pick in (last, len(items) - 1):   # by exact text, then by index
-                try:
-                    combo.select(pick)
-                    self.last_value = last
-                    return True
-                except Exception:
-                    continue
-        # Fallback: open with a real mouse click and press End+Enter (the manual
-        # gesture) in case the option list is virtualized and item_texts is empty.
-        from pywinauto.keyboard import send_keys
+            after = before
+
+        # Fallback: native UIA select of the last item by index.
         try:
-            combo.click_input()
-            time.sleep(0.4)
-            send_keys("{END}")
-            time.sleep(0.2)
-            send_keys("{ENTER}")
-            time.sleep(0.3)
-            self.last_value = (items[-1] if items else _value(combo)) or "<last option>"
-            return True
-        except Exception as exc:         # noqa: BLE001
-            self.last_value = f"<angular last-select failed: {exc!r}>"
+            items = combo.item_texts()
+            if items:
+                combo.select(len(items) - 1)
+                time.sleep(0.4)
+                after = current()
+                if after and after != before:
+                    self.last_value = after
+                    return True
+        except Exception as exc:              # noqa: BLE001
+            self.last_value = f"<angular last-select error: {exc!r}>"
             return False
+
+        self.last_value = f"<angular unchanged: still {after!r}>"
+        return False
 
     def find_cut_open_button(self):
         """The 'Open' button on the newly-created cutting-program row.
