@@ -123,7 +123,7 @@ tools/
 docs/
   ARCHITECTURE.md        this file
   BOOST_SETUP.md         required Boost/RDP settings for reliable vision
-install.bat              [built] one-file installer/updater (clone or ff-update,
+AutoBoost_Installer.bat  [built] one-file installer/updater (clone or ff-update,
                                  pip --user, Desktop shortcut; per-user, no admin)
 ```
 
@@ -162,7 +162,7 @@ window first so the left-anchored offset holds).
   and asks before fast-forwarding; a failed check is one log line, never a
   blocker. The GUI's font/angular fields were removed (fixed to the validated
   shop standard); the CLI keeps the flags.
-- **Installer (0.7.6)** -- `install.bat` is the one file that installs or
+- **Installer (0.7.6)** -- `AutoBoost_Installer.bat` is the one file that installs or
   updates everything: verify py/git (it cannot install them without admin, so
   a missing one is a clear message + exit 1), fast-forward the clone it sits
   in (or clone fresh into `%USERPROFILE%\AutoBoost` when run standalone),
