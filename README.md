@@ -5,12 +5,13 @@ TRUMPF TruTops Boost.
 
 ## Download
 
-**[Download `AutoBoost_Installer.bat`](https://github.com/burntbysam/AutoBoost/raw/refs/heads/main/AutoBoost_Installer.bat)**
+**[Download `AutoBoost_Installer.bat`](https://github.com/burntbysam/AutoBoost/releases/download/v0.7.6/AutoBoost_Installer.bat)**
 — save it anywhere, then double-click it on the Boost workstation. That one
 file installs AutoBoost on a fresh machine or updates an existing install,
-entirely per-user with no admin rights needed. (If your browser opens it as
-text instead of saving it, use right-click → Save Link As... instead of a
-left-click.) Full details in [Install](#install-on-the-rdp-workstation-no-admin-needed)
+entirely per-user with no admin rights needed. (From the
+[v0.7.6 release](https://github.com/burntbysam/AutoBoost/releases/tag/v0.7.6);
+see [Releases](https://github.com/burntbysam/AutoBoost/releases) for other
+versions.) Full details in [Install](#install-on-the-rdp-workstation-no-admin-needed)
 below.
 
 AutoBoost drives the Boost GUI, unattended, across every part in a job. Two
