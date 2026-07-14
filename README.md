@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.7** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.8** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -191,19 +191,25 @@ detect work done in a *previous* run (see roadmap).
 - **Clearance floor.** The placement minimum (`required_clearance_px`) is a
   conservative constant; calibrating it to the part-number length (so very tight
   parts are flagged up front) is planned. Verify still catches a real collision.
-- **Sheet frames and large cutouts (fixed 0.7.7).** A part that imports with a
-  drawing border around the sheet (Boost flags "several outer contours") used to
-  fool placement: the void between the frame and the part is an enclosed region
-  larger than the part, so the number was stencilled *outside* the part. Parts
-  with large window cutouts had the mirror problem -- the number could land in a
-  cutout. Placement now classifies every enclosed region by nesting depth (how
-  many outline bands separate it from the exterior); material and empty space
-  alternate with depth, so the body is the union of the solid depths, which
-  excludes the exterior, holes, large cutouts, and a frame's void. A frame adds
-  one empty level and is detected when the nesting reaches depth 3. Residual edge
-  case: a part with a *decorative frame but no surviving inner feature* (no holes
-  or windows that survive segmentation) can't be told from a plain part by vision
-  alone; that is the one place the void can still capture the number.
+- **Sheet-boundary voids and large cutouts (fixed 0.7.7-0.7.8).** Boost draws a
+  sheet/drawing boundary rectangle around the part in Design view. On a narrow
+  part the void between that boundary and the part is an enclosed region larger
+  than the part, so the old "largest enclosed region" rule stencilled the number
+  *outside* the part (8604300I-1). Parts with large window cutouts had the mirror
+  problem -- the number could land in a cutout (8576131EA2-1C). Placement now
+  classifies every enclosed region by nesting depth (how many outline bands
+  separate it from the exterior); material and empty space alternate with depth,
+  so the body is the union of the solid depths, which excludes the exterior,
+  holes, cutouts, and the boundary void. 0.7.8 made this hold on real screenshots:
+  gentle line-thickening so hole outlines in thin (~30px) material strips don't
+  weld to the part/window edges and corrupt the topology (with a heavy retry if
+  the gentle outline leaks), a crop that no longer slices the drawing (left 0.16,
+  clearing the Design panel without eating the sheet boundary), sheet detection
+  that also works on a part with no holes (the outermost outline enclosing
+  another of comparable filled size), placement debug overlays auto-saved to
+  `logs/<version>/` on every part, and an insufficient-clearance placement now
+  aborts the part instead of stamping too close to an edge. If a bad placement
+  ever slips through anyway, verify FAILs it and the part is flagged and not cut.
 - **Verify gates only the clear-miss case.** The post-save check logs PASS/FAIL
   and is advisory for borderline placements (placement already guaranteed
   clearance). As of 0.7.3 it no longer prints a false FAIL when the before/after

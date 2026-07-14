@@ -16,13 +16,18 @@ Pipeline (all on the Design-View canvas, after Zoom Extents):
     2. Background-difference threshold -> geometry outline. Uses |pixel - bg| so
        it works on a dark or light canvas AND rejects the faint square grid that
        Boost draws behind the part (a plain edge detector latches onto it).
-    3. Morphological close so the outline forms watertight barriers.
+    3. Gentle thicken/close so the outline forms watertight barriers. GENTLE is
+       load-bearing: hole/window outlines that sit in a thin material strip (hex
+       holes in a 30px border) must not weld to the neighbouring part edge, or
+       the topology below turns to garbage (that welding is what stamped
+       8576131EA2-1C's number inside a window cutout). If the light pass finds
+       no body at all (a leaky outline), it retries once with heavy morphology.
     4. Label the free (non-outline) regions and rank them by NESTING DEPTH (outline
        bands from the exterior). Material and empty space alternate with depth, so
        the body is the union of the solid depths (part material), which excludes
-       the exterior, the holes/large window cutouts, AND -- when a part imports
-       with a drawing-border frame -- the void between the frame and the part that
-       used to capture the placement.
+       the exterior, the holes/large window cutouts, AND the void between the part
+       and the sheet/drawing boundary -- the rectangle Boost draws around the part
+       in Design view -- that used to capture the placement on narrow parts.
     5. Erode slightly for line thickness, distance-transform, take the max.
 
 Run standalone against a saved screenshot to see the choice and a debug overlay:
@@ -81,13 +86,14 @@ def _outline_thickness(outline: np.ndarray) -> int:
 
 def _region_depths(
     num: int, labels: np.ndarray, border: set[int], outline: np.ndarray
-) -> dict[int, int]:
+) -> tuple[dict[int, int], dict[int, set[int]]]:
     """Nesting depth of each free region = how many outline bands separate it from
-    the exterior. Built by a breadth-first walk over the region-adjacency graph
-    (two regions are adjacent when a single outline band lies between them), so it
-    is immune to holes/features that happen to sit along any straight sight-line.
+    the exterior, plus the region-adjacency graph it was derived from. Built by a
+    breadth-first walk (two regions are adjacent when a single outline band lies
+    between them), so it is immune to holes/features that happen to sit along any
+    straight sight-line.
 
-        exterior 0  ->  (frame gap) 1  ->  part material 2  ->  window/hole 3 ...
+        exterior 0  ->  (sheet gap) 1  ->  part material 2  ->  window/hole 3 ...
     """
     from collections import deque
 
@@ -114,7 +120,48 @@ def _region_depths(
                 queue.append(v)
     for lbl in range(1, num):
         depth.setdefault(lbl, 0)
-    return depth
+    return depth, adjacency
+
+
+def _cc_fill_area(mask: np.ndarray) -> int:
+    """Area of a connected component once its enclosed interior is filled in.
+
+    Pads by one pixel so a component touching the image edge still floods
+    correctly, then floods the background from a corner; what the flood cannot
+    reach is enclosed by the component.
+    """
+    padded = cv2.copyMakeBorder(mask, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    flood = padded.copy()
+    ph, pw = padded.shape[:2]
+    ff_mask = np.zeros((ph + 2, pw + 2), np.uint8)
+    cv2.floodFill(flood, ff_mask, (0, 0), 255)
+    filled = cv2.bitwise_or(padded, cv2.bitwise_not(flood))
+    return int(cv2.countNonZero(filled))
+
+
+def _sheet_boundary_present(outline: np.ndarray, min_area: int) -> bool:
+    """Is the outermost outline a sheet/drawing boundary AROUND the part, rather
+    than the part itself?
+
+    Boost draws a thin rectangle around the part in Design view (the drawing /
+    raw-material boundary). Its signature: the outline component with the largest
+    filled interior encloses ANOTHER outline component whose own filled interior
+    is comparable (the part). A plain part encloses only its small holes, so the
+    ratio stays tiny; window cutouts stay well under the threshold because a
+    window is a fraction of its part. Detected by comparing the two largest
+    filled-interior areas among the outline's connected components.
+    """
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(outline, connectivity=8)
+    fills: list[int] = []
+    for lbl in range(1, num):
+        x, y, bw, bh, area = stats[lbl]
+        if bw * bh < min_area:      # bbox bounds the fill; skip specks cheaply
+            continue
+        fills.append(_cc_fill_area((labels == lbl).astype(np.uint8) * 255))
+    if len(fills) < 2:
+        return False
+    fills.sort(reverse=True)
+    return fills[1] >= 0.6 * fills[0]
 
 
 def _valid_body_mask(canvas_bgr: np.ndarray, cfg: Config) -> tuple[np.ndarray, np.ndarray]:
@@ -131,13 +178,18 @@ def _valid_body_mask(canvas_bgr: np.ndarray, cfg: Config) -> tuple[np.ndarray, n
 
         exterior 0  ->  part material 1  ->  hole/window 2  ->  island 3 ...
 
-    A part that imports with a drawing-border frame (Boost flags "several outer
-    contours") inserts one extra empty level -- the gap between the frame and the
-    part -- shifting the part to depth 2. That void is the single largest enclosed
-    region, and the old "largest enclosed region" rule planted the part-number in
-    it, OUTSIDE the part. Detecting the frame (nesting reaches depth 3) and taking
-    the material as the shifted-parity depths fixes that AND correctly excludes
-    large window cutouts (which are holes, not body).
+    Boost draws a sheet/drawing boundary rectangle AROUND the part in Design view.
+    It inserts one extra empty level -- the gap between the boundary and the part --
+    shifting the material to depth 2. That gap can be the single largest enclosed
+    region (a narrow part on a wide sheet), and the old "largest enclosed region"
+    rule planted the part-number in it, OUTSIDE the part. The parity shift is
+    detected two independent ways (either suffices): a depth-3 region whose
+    depth-2 neighbour is big (a hole INSIDE material that is itself enclosed), or
+    the outermost outline enclosing another outline of comparable filled size
+    (the boundary around the part -- catches a part with no holes at all).
+
+    Morphology is gentle-first (thin material strips must not weld shut -- see the
+    module docstring) with one heavy retry if the gentle outline leaks.
     """
     pc = cfg.placement
     gray = cv2.cvtColor(canvas_bgr, cv2.COLOR_BGR2GRAY)
@@ -154,15 +206,35 @@ def _valid_body_mask(canvas_bgr: np.ndarray, cfg: Config) -> tuple[np.ndarray, n
     # Geometry = pixels that differ strongly from the background. The faint grid
     # differs only slightly and is rejected; the dark part lines survive.
     diff = cv2.absdiff(gray, np.full_like(gray, background))
-    outline = np.where(diff >= pc.geometry_delta, 255, 0).astype(np.uint8)
+    raw = np.where(diff >= pc.geometry_delta, 255, 0).astype(np.uint8)
 
-    # Thicken/close the outline so it forms watertight barriers with no leaks
-    # between the interior and the exterior.
-    k = np.ones((pc.close_kernel, pc.close_kernel), np.uint8)
-    outline = cv2.dilate(outline, k, iterations=pc.close_iterations)
-    outline = cv2.morphologyEx(outline, cv2.MORPH_CLOSE, k, iterations=pc.close_iterations)
-
+    outline = raw
     body = np.zeros(gray.shape, np.uint8)
+    k = np.ones((pc.close_kernel, pc.close_kernel), np.uint8)
+
+    # Gentle first: heavy thickening welds hole outlines to the part edge across
+    # thin material strips and corrupts the nesting depths. Escalate to heavy
+    # only when the gentle outline leaks (no body found at all).
+    attempts = ((pc.dilate_iterations, pc.close_iterations), (2, 2))
+    for dilate_it, close_it in attempts:
+        outline = cv2.dilate(raw, k, iterations=dilate_it)
+        outline = cv2.morphologyEx(outline, cv2.MORPH_CLOSE, k, iterations=close_it)
+        body = _body_from_outline(outline, pc)
+        if cv2.countNonZero(body) > 0:
+            break
+
+    # Erode a little for line thickness / render blur so we never sit on an edge.
+    if pc.body_erode_px > 0 and cv2.countNonZero(body) > 0:
+        ek = np.ones((pc.body_erode_px, pc.body_erode_px), np.uint8)
+        body = cv2.erode(body, ek)
+
+    return body, outline
+
+
+def _body_from_outline(outline: np.ndarray, pc) -> np.ndarray:
+    """Material mask for one watertight outline: label free regions, rank by
+    nesting depth, take the union of the solid-parity depths."""
+    body = np.zeros(outline.shape, np.uint8)
 
     # Free space = everything that is not an outline pixel. connectedComponents
     # reserves label 0 for the zero pixels (the outline), and labels each
@@ -170,34 +242,31 @@ def _valid_body_mask(canvas_bgr: np.ndarray, cfg: Config) -> tuple[np.ndarray, n
     free = np.where(outline > 0, 0, 255).astype(np.uint8)
     num, labels, stats, _ = cv2.connectedComponentsWithStats(free, connectivity=8)
     if num <= 1:
-        return body, outline
+        return body
 
     # Any label appearing on the image border is exterior background.
     border = set(labels[0, :]) | set(labels[-1, :]) | set(labels[:, 0]) | set(labels[:, -1])
 
-    # Nesting depth of every region, then decide where "solid" material starts.
-    # A drawing-border frame inserts one empty level (the frame->part gap), which
-    # shows up as the nesting reaching depth 3; without a frame it stops at 2
-    # (material -> hole). So the material parity shifts by one when a frame is
-    # present. (A frameless part with an island inside a cutout also reaches
-    # depth 3 -- rare in sheet metal -- and would be read as framed; the post-save
-    # verify is the backstop there.)
-    depth = _region_depths(num, labels, border, outline)
-    frame_offset = 1 if (depth and max(depth.values()) >= 3) else 0
+    depth, adjacency = _region_depths(num, labels, border, outline)
 
-    best_lbl, best_area = -1, 0
-    for lbl in range(1, num):
-        if lbl in border:
-            continue
-        d = depth[lbl] - frame_offset
-        if d < 1 or d % 2 == 0:          # empty levels: exterior, frame gap, holes
-            continue
-        area = int(stats[lbl, cv2.CC_STAT_AREA])
-        if area >= pc.min_contour_area and area > best_area:
-            best_lbl, best_area = lbl, area
+    # Does a sheet/drawing boundary shift the material parity by one? Two
+    # independent signatures, either suffices:
+    #   (a) a hole inside enclosed material: some depth-3 region whose depth-2
+    #       neighbour is substantial. Requiring the BIG depth-2 parent keeps a
+    #       tiny pocket inside an icon or text glyph from faking the signal.
+    #   (b) the outermost outline encloses another outline of comparable filled
+    #       size (the boundary around the part) -- catches a part with no holes.
+    def _deep_hole_witness() -> bool:
+        for lbl in range(1, num):
+            if lbl in border or depth[lbl] != 3:
+                continue
+            for nb in adjacency.get(lbl, ()):
+                if depth.get(nb) == 2 and int(stats[nb, cv2.CC_STAT_AREA]) >= pc.min_contour_area:
+                    return True
+        return False
 
-    if best_lbl < 0 or best_area < pc.min_contour_area:
-        return body, outline
+    sheet_offset = 1 if (_deep_hole_witness()
+                         or _sheet_boundary_present(outline, pc.min_contour_area)) else 0
 
     # Union every material region (a part can have several disjoint solid areas,
     # e.g. strips separated by large window cutouts). The distance transform later
@@ -205,16 +274,11 @@ def _valid_body_mask(canvas_bgr: np.ndarray, cfg: Config) -> tuple[np.ndarray, n
     for lbl in range(1, num):
         if lbl in border:
             continue
-        d = depth[lbl] - frame_offset
+        d = depth[lbl] - sheet_offset
         if d >= 1 and d % 2 == 1 and int(stats[lbl, cv2.CC_STAT_AREA]) >= pc.min_contour_area:
             body[labels == lbl] = 255
 
-    # Erode a little for line thickness / render blur so we never sit on an edge.
-    if pc.body_erode_px > 0:
-        ek = np.ones((pc.body_erode_px, pc.body_erode_px), np.uint8)
-        body = cv2.erode(body, ek)
-
-    return body, outline
+    return body
 
 
 def body_mask(canvas_bgr: np.ndarray, cfg: Config = DEFAULT) -> np.ndarray:

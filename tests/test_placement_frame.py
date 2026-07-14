@@ -1,12 +1,21 @@
-"""Regression tests for the sheet-frame placement bug (0.7.7).
+"""Regression tests for the two real mis-placement bugs (0.7.7 / 0.7.8).
 
-Part 8604300I-1 imported with a drawing-border outline around the sheet (Boost
-flagged "several outer contours"). That border walled off the empty gap between
-it and the narrow part into an enclosed region LARGER than the part interior, so
-the old placement picked that void and stencilled the part-number outside the
-part. These tests reproduce the geometry synthetically and lock in the fix:
+Two parts stencilled their number in the wrong place:
 
-  - a framed part now places INSIDE the part body,
+  - 8604300I-1: a narrow part sitting at the left of Boost's sheet/drawing
+    boundary rectangle. The void between the boundary and the part was the
+    largest enclosed region, so the old "largest enclosed region" rule put the
+    number in the void, right of the part.
+  - 8576131EA2-1C: a wide part with two large window cutouts and hex holes in
+    ~34px material strips. Heavy line-thickening welded the hole outlines to the
+    part/window edges, corrupting the region topology, and the number landed
+    inside a window cutout. The 20%-left crop fraction also sliced through the
+    sheet boundary and the part's left edge.
+
+These tests reproduce both geometries (including a faithful full-screenshot
+replica of 8576131EA2-1C) and lock in the fixes:
+
+  - placement lands ON MATERIAL: never the sheet void, never a window cutout,
   - a plain part is unaffected,
   - verify FAILs a marking sitting out in the void but still assumes-clear a
     thin antialiased sliver at the body edge.
@@ -111,6 +120,62 @@ def test_big_part_filling_view_not_treated_as_frame():
     part = (60, 40, 1550, 805)
     _, res = _place(part)
     assert _inside(res.point, part), f"big part wrongly stripped: {res.point}"
+
+
+def _hexagon(img, cx, cy, r, color, th=1):
+    pts = []
+    for k in range(6):
+        a = np.pi / 3 * k + np.pi / 6
+        pts.append([int(cx + r * np.cos(a)), int(cy + r * np.sin(a))])
+    cv2.polylines(img, [np.array(pts)], True, color, th)
+
+
+def _replica_8576131():
+    """Faithful full-screenshot replica of the real 8576131EA2-1C Design view
+    (1920x1080), coordinates measured from the workstation screenshot: sheet
+    boundary, part outline, two big windows, hex holes centred in ~34px strips,
+    faint canvas grid, and the red/green axis lines. Run through the SAME path
+    as `py -m autoboost.vision.placement shot.png` (fraction crop)."""
+    img = np.full((1080, 1920, 3), 245, np.uint8)
+    for x in range(0, 1920, 17):
+        img[:, x] = (233, 233, 233)
+    for y in range(0, 1080, 17):
+        img[y, :] = (233, 233, 233)
+    cv2.rectangle(img, (352, 315), (1865, 830), (120, 120, 120), 1)   # sheet boundary
+    cv2.rectangle(img, (383, 347), (1833, 797), DARK, 1)              # part outline
+    cv2.rectangle(img, (437, 381), (806, 764), DARK, 1)               # left window
+    cv2.rectangle(img, (917, 381), (1770, 764), DARK, 1)              # right window
+    for x in [420, 622, 824, 900, 1116, 1344, 1573, 1789]:
+        _hexagon(img, x, 364, 8, DARK)
+        _hexagon(img, x, 780, 8, DARK)
+    for x in [420, 824, 900, 1789]:
+        _hexagon(img, x, 572, 8, DARK)
+    img[798:800, :] = (0, 0, 255)              # red X axis on the part bottom edge
+    img[650:920, 384:386] = (0, 200, 0)        # green Y axis stub
+    return img
+
+
+def test_replica_8576131_places_on_material():
+    img = _replica_8576131()
+    res = find_safe_placement(img, DEFAULT)    # fraction crop, like the CLI
+    part = (383, 347, 1833, 797)
+    win_l = (437, 381, 806, 764)
+    win_r = (917, 381, 1770, 764)
+    assert _inside(res.point, part), f"placed outside the part: {res.point}"
+    assert not _inside(res.point, win_l) and not _inside(res.point, win_r), \
+        f"placed inside a window cutout: {res.point}"
+
+
+def test_narrow_part_on_wide_sheet_places_inside():
+    """The original 8604300I-1 shape: the sheet/drawing boundary is ~2x the part
+    width with the part at its left, so the right-hand void inside the boundary
+    is much larger than the part interior. The number must still land on the
+    part."""
+    part = (410, 40, 838, 800)                 # narrow, tall, at the left
+    sheet = (400, 20, 1214, 820)               # boundary ~2x the part width
+    _, res = _place(part, sheet)
+    assert _inside(res.point, part), \
+        f"narrow part on wide sheet placed in the void: {res.point}"
 
 
 def test_verify_fails_marking_in_the_void():

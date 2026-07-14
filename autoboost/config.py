@@ -25,7 +25,13 @@ class CanvasRegion:
     panel widgets can't be mistaken for part geometry.
     """
 
-    left: float = 0.20    # skip the left Properties/parts panel
+    # The Design-view left panel ends at ~300px on the reference 1920-wide setup,
+    # and at Zoom Extents the sheet/drawing boundary can start as little as ~50px
+    # right of it. left=0.20 (384px) sliced through that boundary -- and even
+    # through the part's own edge on wide parts -- making the material region
+    # touch the crop border and read as exterior. 0.16 (307px) clears the panel
+    # without eating the drawing.
+    left: float = 0.16    # skip the left Properties/parts panel
     top: float = 0.08     # skip the top toolbar/ribbon
     right: float = 0.02   # small right margin
     bottom: float = 0.06  # skip the bottom status bar
@@ -50,9 +56,15 @@ class PlacementConfig:
     # dark part geometry and ignores the low-contrast grid. Works for either
     # polarity (dark-on-light or light-on-dark) because it uses |value - bg|.
     geometry_delta: int = 80
-    # Dilation to close small gaps in the outline so regions are watertight.
+    # Dilation/close to seal small gaps in the outline so regions are watertight.
+    # GENTLE by default: hex holes sitting in a ~30px material strip weld to the
+    # neighbouring part/window edges at 2 iterations, corrupting the region
+    # topology (the 8576131EA2-1C number-in-a-window bug). One iteration seals
+    # ~4px of gap and keeps the strips open; placement escalates to heavy
+    # morphology on its own if the gentle outline leaks.
     close_kernel: int = 3
-    close_iterations: int = 2
+    dilate_iterations: int = 1
+    close_iterations: int = 1
     # Ignore contours smaller than this many pixels (noise / tiny dimension marks).
     min_contour_area: int = 2000
     # Extra safety erosion of the valid body mask, in pixels, before the

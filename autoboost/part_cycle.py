@@ -20,11 +20,31 @@ Each step logs, so a failure points at exactly one action.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
+from datetime import datetime
 
+from . import __version__
 from .config import DEFAULT
 from .navigator.boost_uia import BoostUIA
+
+
+def _save_debug(image, tag: str, log=print) -> None:
+    """Best-effort: drop a vision debug overlay in logs/<version>/ so any odd
+    placement/verify decision comes with the exact pixels that produced it."""
+    if image is None:
+        return
+    try:
+        import cv2
+        dbg_dir = os.path.join("logs", __version__)
+        os.makedirs(dbg_dir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(dbg_dir, f"{tag}_{stamp}.png")
+        cv2.imwrite(path, image)
+        log(f"debug overlay saved: {path}")
+    except Exception:
+        pass
 
 
 # Zoom the placement point up before selecting the (possibly tiny) text. Scroll
@@ -91,7 +111,8 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
     res = find_safe_placement(clean, DEFAULT, rect)
     log(f"placement: point={res.point} clearance={res.clearance_px:.0f}px "
         f"ok={res.ok} ({res.reason})")
-    if res.point is None:
+    _save_debug(res.debug, "placement", log)
+    if res.point is None or not res.ok:
         log("no safe placement found -- aborting part")
         return False
     px, py = res.point
@@ -166,6 +187,7 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
         v = verify_placement(clean, post, DEFAULT, rect)
         log(f"verify -> {'PASS' if v.ok else 'FAIL'} ({v.reason})")
         if not v.ok:
+            _save_debug(v.debug, "verify_fail", log)
             # A hard FAIL means the saved marking is outside the part body (the
             # number landed in the void beside it). Do NOT let this part go on to
             # be cut. Close Design back to Home and report failure so the runner

@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.7)
+# AutoBoost Architecture (Beta 0.7.8)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -54,14 +54,22 @@ nearest edge *is* the available clearance, so AutoBoost can reject a part when
 there is genuinely no room, instead of silently placing too close to an edge.
 
 The body itself is found by **nesting depth**, not by "largest enclosed region"
-(0.7.7). Each free region is ranked by how many outline bands separate it from the
-exterior (a breadth-first walk over region adjacency); material and empty space
-alternate with depth, so the body is the union of the solid depths. This excludes
-holes and large window cutouts, and -- critically -- the *void between a
-drawing-border frame and the part* on imports Boost flags as "several outer
-contours." That void is the largest enclosed region, so the old rule stencilled
-the number outside the part (the `8604300I-1` / `8576131EA2-1C` bug); a frame adds
-one empty nesting level and is detected when the nesting reaches depth 3.
+(0.7.7-0.7.8). Each free region is ranked by how many outline bands separate it
+from the exterior (a breadth-first walk over region adjacency); material and
+empty space alternate with depth, so the body is the union of the solid depths.
+This excludes holes and large window cutouts, and -- critically -- the *void
+between the part and the sheet/drawing boundary rectangle Boost draws around it
+in Design view*. On a narrow part that void is the largest enclosed region, so
+the old rule stencilled the number outside the part (`8604300I-1`); on a part
+with big window cutouts the mirror failure put it inside a cutout
+(`8576131EA2-1C`). The boundary adds one empty nesting level, detected by either
+a hole-inside-enclosed-material witness (depth-3 region with a big depth-2
+neighbour) or the outermost outline enclosing another of comparable filled size
+(covers a part with no holes). Two real-screenshot lessons are baked in (0.7.8):
+line-thickening is gentle so hole outlines in ~30px material strips don't weld
+to the part/window edges and scramble the depths (heavy retry only if the gentle
+outline leaks), and the vision crop must not slice the drawing (left fraction
+0.16, matching the Design panel edge).
 
 The clearance threshold (`PlacementConfig.required_clearance_px`) must be
 calibrated to the on-screen footprint of the ~3x expanded text. It is currently
@@ -109,7 +117,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.7)
+  __init__.py            app name + version (AutoBoost Beta 0.7.8)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
@@ -154,14 +162,19 @@ auto_id.
 
 Beta 0.7.7 -- two validated tools plus a combined runner that chains them:
 
-- **Placement robustness (0.7.7)** -- body detection moved from
+- **Placement robustness (0.7.7-0.7.8)** -- body detection moved from
   "largest enclosed region" to nesting-depth material extraction, fixing parts
-  that stencilled the number outside the body (sheet-frame void) or in a window
-  cutout. Verify's "inconclusive" guard now distinguishes an edge sliver from a
-  marking sitting far from the body, and a hard verify FAIL skips the cut and
-  flags the part instead of cutting a mis-marked blank. Regression tests in
-  `tests/test_placement_frame.py` cover plain / framed / windowed / big-part
-  geometry against the live vision code.
+  that stencilled the number outside the body (sheet-boundary void, 8604300I-1)
+  or in a window cutout (8576131EA2-1C). 0.7.8 hardened it against the real
+  screenshots: gentle morphology (thin-strip weld fix) with heavy retry,
+  non-slicing crop, no-holes sheet detection, per-part placement overlays in
+  `logs/<version>/`, and insufficient clearance now aborts the part. Verify's
+  "inconclusive" guard distinguishes an edge sliver from a marking sitting far
+  from the body, and a hard verify FAIL skips the cut and flags the part instead
+  of cutting a mis-marked blank. Regression tests in
+  `tests/test_placement_frame.py` cover plain / sheet-bounded / windowed /
+  big-part geometry plus a faithful full-screenshot replica of 8576131EA2-1C,
+  all against the live vision code.
 
 
 - **Stenciling** -- an 11/11-part job ran unattended with zero skips. The font
