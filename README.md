@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.6** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.7** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -191,12 +191,28 @@ detect work done in a *previous* run (see roadmap).
 - **Clearance floor.** The placement minimum (`required_clearance_px`) is a
   conservative constant; calibrating it to the part-number length (so very tight
   parts are flagged up front) is planned. Verify still catches a real collision.
-- **Verify is advisory, not gating.** The post-save check logs PASS/FAIL but
-  does not skip a part (placement already guaranteed clearance). As of 0.7.3 it
-  no longer prints a false FAIL when the before/after diff catches only a tiny
-  sliver of change (`text_px < 60` and ~all of it at an edge) -- that's reported
-  as "inconclusive, assumed clear" instead. A genuine large marking landing
-  outside the body still FAILs.
+- **Sheet frames and large cutouts (fixed 0.7.7).** A part that imports with a
+  drawing border around the sheet (Boost flags "several outer contours") used to
+  fool placement: the void between the frame and the part is an enclosed region
+  larger than the part, so the number was stencilled *outside* the part. Parts
+  with large window cutouts had the mirror problem -- the number could land in a
+  cutout. Placement now classifies every enclosed region by nesting depth (how
+  many outline bands separate it from the exterior); material and empty space
+  alternate with depth, so the body is the union of the solid depths, which
+  excludes the exterior, holes, large cutouts, and a frame's void. A frame adds
+  one empty level and is detected when the nesting reaches depth 3. Residual edge
+  case: a part with a *decorative frame but no surviving inner feature* (no holes
+  or windows that survive segmentation) can't be told from a plain part by vision
+  alone; that is the one place the void can still capture the number.
+- **Verify gates only the clear-miss case.** The post-save check logs PASS/FAIL
+  and is advisory for borderline placements (placement already guaranteed
+  clearance). As of 0.7.3 it no longer prints a false FAIL when the before/after
+  diff catches only a tiny sliver of change (`text_px < 60` and ~all of it at an
+  edge) -- reported as "inconclusive, assumed clear." As of 0.7.7 that
+  inconclusive path is split by DISTANCE from the part: a tiny changed region
+  hugging the body edge is still assumed clear, but one sitting far from the body
+  (the marking landed in the void beside the part) is a hard FAIL, and a hard
+  FAIL now skips the cut and flags the part instead of cutting it.
 - **Cut auto-apply click is positional.** The Cut ribbon is invisible to UIA, so
   the auto-apply button is clicked by a fixed offset. The click first forces the
   Cut window to fill the screen via Win32 `ShowWindow`/`MoveWindow` (the UIA

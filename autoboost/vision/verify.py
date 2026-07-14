@@ -113,14 +113,35 @@ def verify_placement(
     # only a thin antialiased sliver at a geometry edge, not the real marking (it
     # rendered at nearly the same brightness as before). That's too little to
     # judge, and placement already guaranteed clearance, so treat it like the
-    # "no change detected" case rather than failing on noise. Requiring collisions
-    # to be ~the entire region keeps a genuine PARTIAL overlap reporting normally.
+    # "no change detected" case rather than failing on noise.
+    #
+    # BUT a genuine mis-placement on a large part has the SAME size signature (a
+    # tiny detected region, ~all outside the body) -- the number was placed in the
+    # void beside the part, so on a Zoom-Extents frame it is only a few pixels.
+    # The two are told apart by DISTANCE from the body: an antialiased sliver
+    # hugs the body edge (a few px away); a number in the void sits far from any
+    # body pixel. So only assume-clear when the detected pixels are close to the
+    # body; a small region sitting far out is a real FAIL, not noise.
     INCONCLUSIVE_TEXT_PX = 60
+    NEAR_BODY_PX = 15
     if text_px < INCONCLUSIVE_TEXT_PX and collision_px >= 0.9 * text_px:
+        dist_from_body = cv2.distanceTransform(
+            cv2.bitwise_not(body), cv2.DIST_L2, 5)
+        text_dists = dist_from_body[text > 0]
+        median_dist = float(np.median(text_dists)) if text_dists.size else 0.0
+        if median_dist <= NEAR_BODY_PX:
+            return VerifyResult(
+                True, text_px, collision_px,
+                f"marking barely detected (text={text_px}px, ~all at an edge) -- "
+                f"inconclusive, assumed clear (placement clearance already checked)",
+                debug,
+            )
+        debug[text > 0] = (255, 128, 0)
+        debug[outside > 0] = (0, 0, 255)
         return VerifyResult(
-            True, text_px, collision_px,
-            f"marking barely detected (text={text_px}px, ~all at an edge) -- "
-            f"inconclusive, assumed clear (placement clearance already checked)",
+            False, text_px, collision_px,
+            f"marking is outside the part body (text={text_px}px, "
+            f"~{median_dist:.0f}px from the part) -- placement landed in the void",
             debug,
         )
 

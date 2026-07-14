@@ -165,6 +165,19 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
         # sees no change -- that was the false FAIL).
         v = verify_placement(clean, post, DEFAULT, rect)
         log(f"verify -> {'PASS' if v.ok else 'FAIL'} ({v.reason})")
+        if not v.ok:
+            # A hard FAIL means the saved marking is outside the part body (the
+            # number landed in the void beside it). Do NOT let this part go on to
+            # be cut. Close Design back to Home and report failure so the runner
+            # flags it and skips the cut; the operator removes the stray marking
+            # and re-runs. (Verify is otherwise advisory -- a real out-of-body
+            # marking is the one case that must gate.)
+            if do_close:
+                pyautogui.press("3")
+                time.sleep(t.after_close)
+                log("closed Design view (3)")
+            log("part cycle FAILED verify -- marking outside body; part flagged")
+            return False
 
     # 7. Close Design view (optional).
     if do_close:

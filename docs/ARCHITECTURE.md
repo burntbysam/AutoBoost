@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.6)
+# AutoBoost Architecture (Beta 0.7.7)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -53,6 +53,16 @@ farthest from any edge, via `cv2.distanceTransform`. That point's distance to th
 nearest edge *is* the available clearance, so AutoBoost can reject a part when
 there is genuinely no room, instead of silently placing too close to an edge.
 
+The body itself is found by **nesting depth**, not by "largest enclosed region"
+(0.7.7). Each free region is ranked by how many outline bands separate it from the
+exterior (a breadth-first walk over region adjacency); material and empty space
+alternate with depth, so the body is the union of the solid depths. This excludes
+holes and large window cutouts, and -- critically -- the *void between a
+drawing-border frame and the part* on imports Boost flags as "several outer
+contours." That void is the largest enclosed region, so the old rule stencilled
+the number outside the part (the `8604300I-1` / `8576131EA2-1C` bug); a frame adds
+one empty nesting level and is detected when the nesting reaches depth 3.
+
 The clearance threshold (`PlacementConfig.required_clearance_px`) must be
 calibrated to the on-screen footprint of the ~3x expanded text. It is currently
 a placeholder and will be tuned from real screenshots.
@@ -99,7 +109,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.6)
+  __init__.py            app name + version (AutoBoost Beta 0.7.7)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
@@ -142,7 +152,17 @@ auto_id.
 
 ## Current status
 
-Beta 0.7.6 -- two validated tools plus a combined runner that chains them:
+Beta 0.7.7 -- two validated tools plus a combined runner that chains them:
+
+- **Placement robustness (0.7.7)** -- body detection moved from
+  "largest enclosed region" to nesting-depth material extraction, fixing parts
+  that stencilled the number outside the body (sheet-frame void) or in a window
+  cutout. Verify's "inconclusive" guard now distinguishes an edge sliver from a
+  marking sitting far from the body, and a hard verify FAIL skips the cut and
+  flags the part instead of cutting a mis-marked blank. Regression tests in
+  `tests/test_placement_frame.py` cover plain / framed / windowed / big-part
+  geometry against the live vision code.
+
 
 - **Stenciling** -- an 11/11-part job ran unattended with zero skips. The font
   chain (the hardest piece) is fully automated: `add_font_type` (keyboard
