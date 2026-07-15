@@ -16,10 +16,22 @@ holes-excluded mask placement uses). Any text pixel on the boundary, in a hole,
 or outside the part is a collision -> the placement is unsafe and the part should
 be undone and retried or flagged.
 
+When the caller knows WHERE the number was placed (it always does -- placement
+returned the point), verification is gated to that spot: only changed components
+near the expected placement rectangle count as the marking. The live 0.7.11 run
+failed all five parts on perfectly-placed markings because the tab-bar title
+gained its modified marker, the bottom icon strip re-rendered, and viewport
+frame lines shifted 1px between the two frames -- all far from the placement
+point, all counted as "collisions". Those diffs can never be our marking: we
+stamped exactly one thing at a known point. A genuine void stamp still fails,
+because it appears AT the expected point (that's where placement told us to
+click), far from the body.
+
 Run standalone against a before/after pair:
 
     python -m autoboost.vision.verify before.png after.png
     python -m autoboost.vision.verify before.png after.png --region 380 90 1900 1030
+    python -m autoboost.vision.verify before.png after.png --point 1108 431
 
 Prints PASS/FAIL with the collision pixel count and writes after.verify.png.
 """
@@ -103,13 +115,48 @@ def _new_text_mask(pre: np.ndarray, post: np.ndarray, cfg: Config,
     return kept
 
 
+def _gate_rect(expect_point: tuple[int, int],
+               expect_half: tuple[int, int] | None,
+               x1: int, y1: int) -> tuple[int, int, int, int]:
+    """Crop-space rectangle around the expected placement where the marking may
+    appear. Generous on purpose (saving expands the text ~3x and the click point
+    is the rectangle centre, not a corner): 3x the reserved half-extents with a
+    floor. UI junk lives hundreds of px away (tab bar, icon strip, frame lines),
+    so generosity costs nothing."""
+    ex, ey = expect_point[0] - x1, expect_point[1] - y1
+    hx, hy = expect_half if expect_half else (0, 0)
+    gx = max(3 * hx, 80)
+    gy = max(3 * hy, 40)
+    return ex - gx, ey - gy, ex + gx, ey + gy
+
+
+def _keep_components_in(mask: np.ndarray,
+                        gate: tuple[int, int, int, int]) -> np.ndarray:
+    """Keep only connected components whose bbox intersects the gate rect."""
+    gx1, gy1, gx2, gy2 = gate
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    kept = np.zeros_like(mask)
+    for lbl in range(1, num):
+        x, y, bw, bh = (int(v) for v in stats[lbl][:4])
+        if x <= gx2 and x + bw >= gx1 and y <= gy2 and y + bh >= gy1:
+            kept[labels == lbl] = 255
+    return kept
+
+
 def verify_placement(
     pre_bgr: np.ndarray,
     post_bgr: np.ndarray,
     cfg: Config = DEFAULT,
     canvas_rect: tuple[int, int, int, int] | None = None,
+    expect_point: tuple[int, int] | None = None,
+    expect_half: tuple[int, int] | None = None,
 ) -> VerifyResult:
-    """Confirm the saved part-number text lies entirely within the part body."""
+    """Confirm the saved part-number text lies entirely within the part body.
+
+    expect_point/expect_half (full-screen px, as returned by placement) gate the
+    detection to the spot we actually stamped -- see the module docstring. When
+    omitted (standalone CLI use), the whole crop is judged as before.
+    """
     if pre_bgr.shape != post_bgr.shape:
         return VerifyResult(False, 0, 0, "pre/post screenshots differ in size")
 
@@ -123,12 +170,24 @@ def verify_placement(
     pre_c = pre_bgr[y1:y2, x1:x2]
     post_c = post_bgr[y1:y2, x1:x2]
 
+    gate = None
+    if expect_point is not None:
+        gate = _gate_rect(expect_point, expect_half, x1, y1)
+
     text = _new_text_mask(pre_c, post_c, cfg)
+    ignored_px = 0
+    if gate is not None:
+        raw_px = cv2.countNonZero(text)
+        text = _keep_components_in(text, gate)
+        ignored_px = raw_px - cv2.countNonZero(text)
     text_px = cv2.countNonZero(text)
 
     debug = post_c.copy()
     body = body_mask(pre_c, cfg)
     debug[body > 0] = (0.7 * debug[body > 0] + np.array([0, 60, 0])).astype(np.uint8)
+    if gate is not None:
+        cv2.rectangle(debug, (gate[0], gate[1]), (gate[2], gate[3]),
+                      (255, 0, 255), 1)
 
     if text_px < 20:
         # No detectable change at the normal threshold. At Zoom Extents on a
@@ -143,6 +202,12 @@ def verify_placement(
         faint = _new_text_mask(pre_c, post_c, cfg,
                                delta=cfg.placement.verify_low_delta,
                                keep_component_px=6)
+        if gate is not None:
+            # Same gating as the main pass: a void stamp appears AT the expected
+            # point, so restricting the rescue to the gate loses nothing -- and
+            # stops faint far-away UI re-renders (tab-bar title, icon strip)
+            # from masquerading as a "marking in the void".
+            faint = _keep_components_in(faint, gate)
         fnum, flabels, fstats, _ = cv2.connectedComponentsWithStats(faint, connectivity=8)
         if fnum > 1:
             biggest = max(range(1, fnum), key=lambda l: int(fstats[l, cv2.CC_STAT_AREA]))
@@ -221,9 +286,11 @@ def verify_placement(
 
     debug[text > 0] = (255, 128, 0)      # detected text = blue-ish
     debug[outside > 0] = (0, 0, 255)     # collisions = red
+    gated = f", ignored {ignored_px}px of UI changes away from the placement point" \
+        if ignored_px else ""
     reason = (
-        f"text={text_px}px, collisions={collision_px}px, tolerance={tolerance}px "
-        f"-> {'PASS' if ok else 'FAIL'}"
+        f"text={text_px}px, collisions={collision_px}px, tolerance={tolerance}px"
+        f"{gated} -> {'PASS' if ok else 'FAIL'}"
     )
     return VerifyResult(ok, text_px, collision_px, reason, debug)
 
@@ -237,6 +304,14 @@ def _main(argv: list[str]) -> int:
     if "--region" in argv:
         i = argv.index("--region")
         canvas_rect = tuple(int(v) for v in argv[i + 1 : i + 5])
+    expect_point = None
+    if "--point" in argv:
+        i = argv.index("--point")
+        expect_point = tuple(int(v) for v in argv[i + 1 : i + 3])
+    expect_half = None
+    if "--half" in argv:
+        i = argv.index("--half")
+        expect_half = tuple(int(v) for v in argv[i + 1 : i + 3])
 
     pre = cv2.imread(pre_path)
     post = cv2.imread(post_path)
@@ -244,7 +319,8 @@ def _main(argv: list[str]) -> int:
         print("Could not read one of the images.")
         return 1
 
-    result = verify_placement(pre, post, DEFAULT, canvas_rect)
+    result = verify_placement(pre, post, DEFAULT, canvas_rect,
+                              expect_point=expect_point, expect_half=expect_half)
     print(f"result   : {'PASS' if result.ok else 'FAIL'}")
     print(f"text_px  : {result.text_px}")
     print(f"collision: {result.collision_px}")

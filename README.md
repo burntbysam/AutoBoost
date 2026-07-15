@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.11** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.12** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -54,6 +54,13 @@ the marking is clear of edges/holes → close → next part.
   engraving is yellow, so it's detected by colour-saturation gain as well as
   darkening, and line-shaped re-render artifacts (axis lines, the hint-text
   row) are discarded instead of being flagged as out-of-body markings.
+- **Verify is gated to the placement point** (0.7.12): only changes near the
+  spot the number was actually stamped count as the marking. UI chrome that
+  re-renders between the two frames (the tab-bar title gaining its modified
+  marker, the bottom icon strip, 1px-shifted viewport frame lines) failed
+  five correctly-placed parts in a row; those diffs are now ignored, while a
+  stamp in the void still fails because it appears AT the expected point,
+  far from the part body.
 - **Navigation** (parts list, open/save/close, the Properties/font chain) is
   driven by Windows UI Automation where possible — no fragile image templates —
   with mouse/keyboard for the two owner-drawn dropdowns and the drawing canvas.

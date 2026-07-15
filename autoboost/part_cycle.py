@@ -213,8 +213,12 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
         log("saved (2)")
         # Verify against the CLEAN pre-placement frame: the marking is the diff
         # (the text is already full-size before save, so a pre/post-save diff
-        # sees no change -- that was the false FAIL).
-        v = verify_placement(clean, post, DEFAULT, rect)
+        # sees no change -- that was the false FAIL). Gated to the placement
+        # point: UI chrome re-rendering elsewhere (tab-bar modified marker,
+        # icon strip, frame lines) failed five good parts in the 0.7.11 run.
+        v = verify_placement(clean, post, DEFAULT, rect,
+                             expect_point=res.point,
+                             expect_half=res.half_extent)
         log(f"verify -> {'PASS' if v.ok else 'FAIL'} ({v.reason})")
         if not v.ok:
             _save_debug(v.debug, "verify_fail", log)

@@ -377,6 +377,75 @@ def test_verify_ignores_shifted_axis_line():
     assert v.ok, f"shifted axis line wrongly FAILed: {v.reason}"
 
 
+def _ui_junk(post):
+    """The UI re-renders that failed all five parts of the live 0.7.11 run:
+    the tab-bar title gaining its modified marker (compact text blobs near the
+    bottom, >10px from the crop edge so the near-edge filter misses them), the
+    bottom icon strip, and a viewport frame line shifted 1px (1x38 vertical --
+    aspect 38, just under the MAX_ASPECT=40 filter)."""
+    cv2.putText(post, "8604300I-1_01*", (45, H - 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, DARK, 1)
+    cv2.rectangle(post, (660, H - 60), (676, H - 56), DARK, -1)   # icon re-render
+    post[H - 90:H - 52, 1048] = DARK                              # frame line, 1x38
+
+
+def test_verify_gated_ignores_ui_rerenders():
+    """Live 0.7.11: markings placed correctly on all five parts, but tab-bar /
+    icon-strip / frame-line re-renders far from the placement point were counted
+    as collisions -> 0/17. Gated to the expected point, those diffs are ignored
+    and the good marking PASSes."""
+    part = (120, 60, 1400, 790)
+    pre = _canvas(part)
+    post = pre.copy()
+    _yellow_text(post, (700, 420))
+    _ui_junk(post)
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H))
+    assert not v.ok, "sanity: ungated verify should still trip on the UI junk"
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H),
+                         expect_point=(700, 415), expect_half=(44, 10))
+    assert v.ok, f"gated verify must ignore far-away UI re-renders: {v.reason}"
+    assert v.text_px >= 20, f"the real marking must still be DETECTED ({v.reason})"
+
+
+def test_verify_gated_still_fails_void_stamp():
+    # A void stamp appears AT the expected point (that's where we clicked), so
+    # gating must not weaken the void catch.
+    part = (120, 60, 470, 790)
+    pre = _canvas(part)
+    post = pre.copy()
+    _yellow_text(post, (1000, 420))
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H),
+                         expect_point=(1030, 415), expect_half=(44, 10))
+    assert not v.ok, f"void stamp at the expected point must FAIL: {v.reason}"
+
+
+def test_verify_gated_rescue_ignores_faint_far_junk():
+    # No detectable marking (e.g. it rendered at 1px, sub-threshold), but the
+    # tab-bar text changed faintly: the low-contrast rescue must not flag that
+    # far-from-point junk as a "marking in the void".
+    part = (120, 60, 1400, 790)
+    pre = _canvas(part)
+    post = pre.copy()
+    cv2.putText(post, "8604300I-1_01*", (45, H - 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (185, 185, 185), 1)
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H),
+                         expect_point=(700, 415), expect_half=(44, 10))
+    assert v.ok, f"faint far-away UI junk wrongly FAILed the rescue pass: {v.reason}"
+
+
+def test_verify_gated_rescue_still_fails_faint_void_stamp():
+    # The 8576131EA2-1D blind spot, with gating: a faint stamp at the expected
+    # point sitting in the void must still FAIL.
+    part = (120, 60, 470, 790)
+    pre = _canvas(part)
+    post = pre.copy()
+    cv2.putText(post, "8576131EA2-1D", (900, 420),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (185, 185, 185), 1)
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H),
+                         expect_point=(985, 415), expect_half=(60, 10))
+    assert not v.ok, f"faint void stamp at the expected point must FAIL: {v.reason}"
+
+
 def test_text_rectangle_is_wide_and_fits_on_material():
     # A wide part (real 1000mm x 300mm) that fills a ~1450px-wide body: a 13-char
     # number reserves a WIDE, SHORT rectangle and must fit on the material.

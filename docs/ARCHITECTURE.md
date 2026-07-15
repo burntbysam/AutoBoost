@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.11)
+# AutoBoost Architecture (Beta 0.7.12)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -105,6 +105,22 @@ that run were re-rendered axis lines / hint text -- line-shaped components
 (extreme bbox aspect, hollow line-work, or hugging the crop edge) are discarded
 before judging.
 
+The third live run (0.7.11) had every placement CORRECT and every marking
+detected -- and still failed 5/5, because other UI chrome also changes between
+the pre/post frames: the tab-bar title gains its modified marker, the bottom
+icon strip re-renders, and viewport frame lines shift 1px (a 1x38 vertical is
+aspect 38, under the 40 line filter; the tab text is compact and >10px from the
+crop edge, so both slipped the shape filters). 0.7.12 closes the class instead
+of chasing shapes: verify now receives the placement point and reserved
+half-extents (`expect_point`/`expect_half`) and gates detection to a generous
+rectangle around them (3x the half-extents) -- we stamped exactly one thing at a
+known point, so a change 400px away can never be our marking. The void catch is
+unweakened: a mis-stamp appears AT the expected point (that is where the click
+landed), far from the body, and still FAILs -- the gated rescue pass included.
+Replayed against the five real 0.7.11 overlays: the gate retains each true
+marking (0px outside the body) and drops every junk component; all five flip to
+PASS.
+
 Because the saved engraving is a WIDE, SHORT strip, placement reserves a
 RECTANGLE of the text footprint rather than a circle (0.7.10): a point is valid
 only if the whole footprint (erode the body by that rectangle) is clear, and
@@ -160,7 +176,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.11)
+  __init__.py            app name + version (AutoBoost Beta 0.7.12)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
