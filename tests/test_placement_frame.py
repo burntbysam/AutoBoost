@@ -130,18 +130,28 @@ def _hexagon(img, cx, cy, r, color, th=1):
     cv2.polylines(img, [np.array(pts)], True, color, th)
 
 
-def _replica_8576131():
+GREY = (150, 150, 150)     # Boost's boundary rects: visible at the legacy
+                           # threshold (diff 95 >= 80) but below the strict one
+
+
+def _replica_8576131(double_boundary=False):
     """Faithful full-screenshot replica of the real 8576131EA2-1C Design view
-    (1920x1080), coordinates measured from the workstation screenshot: sheet
-    boundary, part outline, two big windows, hex holes centred in ~34px strips,
-    faint canvas grid, and the red/green axis lines. Run through the SAME path
-    as `py -m autoboost.vision.placement shot.png` (fraction crop)."""
+    (1920x1080), coordinates measured from the workstation screenshot: grey
+    boundary rect(s), part outline, two big windows, hex holes centred in ~34px
+    strips, faint canvas grid, and the red/green axis lines. Run through the
+    SAME path as `py -m autoboost.vision.placement shot.png` (fraction crop).
+
+    double_boundary adds the second nested grey rectangle (annotation plane)
+    that 8576131EA2-1D carries -- the extra nesting level that inverted the
+    body parity and put its number inside a window cutout."""
     img = np.full((1080, 1920, 3), 245, np.uint8)
     for x in range(0, 1920, 17):
         img[:, x] = (233, 233, 233)
     for y in range(0, 1080, 17):
         img[y, :] = (233, 233, 233)
-    cv2.rectangle(img, (352, 315), (1865, 830), (120, 120, 120), 1)   # sheet boundary
+    cv2.rectangle(img, (352, 315), (1865, 830), (120, 120, 120), 1)   # drawing boundary
+    if double_boundary:
+        cv2.rectangle(img, (340, 303), (1877, 842), GREY, 1)          # annotation plane
     cv2.rectangle(img, (383, 347), (1833, 797), DARK, 1)              # part outline
     cv2.rectangle(img, (437, 381), (806, 764), DARK, 1)               # left window
     cv2.rectangle(img, (917, 381), (1770, 764), DARK, 1)              # right window
@@ -176,6 +186,94 @@ def test_narrow_part_on_wide_sheet_places_inside():
     _, res = _place(part, sheet)
     assert _inside(res.point, part), \
         f"narrow part on wide sheet placed in the void: {res.point}"
+
+
+def test_replica_double_boundary_places_on_material():
+    """The 8576131EA2-1D failure: TWO nested grey boundary rects (drawing
+    boundary + annotation plane) inverted the body parity, so the run stencilled
+    the number inside the right window. With grey boundaries kept out of the
+    outline the count of them must not matter."""
+    img = _replica_8576131(double_boundary=True)
+    res = find_safe_placement(img, DEFAULT)
+    part = (383, 347, 1833, 797)
+    win_l = (437, 381, 806, 764)
+    win_r = (917, 381, 1770, 764)
+    assert _inside(res.point, part), f"placed outside the part: {res.point}"
+    assert not _inside(res.point, win_l) and not _inside(res.point, win_r), \
+        f"placed inside a window cutout: {res.point}"
+
+
+def test_double_grey_boundary_plain_part():
+    """The 8576131EA2-09 failure: a plain part inside doubled grey boundaries
+    had the thin boundary ring picked as the body (16px clearance, aborted).
+    The interior must be picked instead."""
+    img = np.full((H, W, 3), 245, np.uint8)
+    part = (420, 60, 1190, 790)
+    cv2.rectangle(img, (390, 35), (1220, 815), (120, 120, 120), 1)
+    cv2.rectangle(img, (378, 24), (1232, 826), GREY, 1)
+    cv2.rectangle(img, part[:2], part[2:], DARK, 1)
+    for i in range(5):
+        cx = int(part[0] + (i + 1) * (part[2] - part[0]) / 6)
+        cv2.circle(img, (cx, part[1] + 30), 11, DARK, 2)
+        cv2.circle(img, (cx, part[3] - 30), 11, DARK, 2)
+    res = find_safe_placement(img, DEFAULT, (0, 0, W, H))
+    assert _inside(res.point, part), f"placed in the boundary ring: {res.point}"
+    assert res.clearance_px > 100, \
+        f"clearance {res.clearance_px:.0f}px says the thin ring was picked, not the interior"
+
+
+def test_axis_marks_do_not_break_segmentation():
+    """Boost draws the CAD origin in colour: a red X-axis line and green Y-axis
+    line riding EXACTLY along the part's bottom/left edges (overdrawing them),
+    plus a blue 0,0 dot. Colour-saturated pixels must act as barriers, so the
+    overdrawn edges stay sealed and the body is still the interior."""
+    img = np.full((H, W, 3), 245, np.uint8)
+    part = (420, 60, 1190, 790)
+    cv2.rectangle(img, part[:2], part[2:], DARK, 1)
+    for i in range(5):
+        cx = int(part[0] + (i + 1) * (part[2] - part[0]) / 6)
+        cv2.circle(img, (cx, part[1] + 30), 11, DARK, 2)
+        cv2.circle(img, (cx, part[3] - 30), 11, DARK, 2)
+    # Axis lines OVERWRITE the part's left and bottom edges (worst case: the
+    # dark line is fully occluded by the coloured one), and extend beyond.
+    img[part[3] - 1:part[3] + 1, :] = (0, 0, 255)          # red X axis, full width
+    img[100:H, part[0] - 1:part[0] + 1] = (0, 200, 0)      # green Y axis
+    cv2.circle(img, (part[0], part[3]), 4, (255, 80, 0), -1)   # blue-ish origin dot
+    # Arrowheads out in the void.
+    cv2.arrowedLine(img, (part[0], part[3] + 20), (part[0] + 60, part[3] + 20),
+                    (0, 0, 255), 2, tipLength=0.5)
+    res = find_safe_placement(img, DEFAULT, (0, 0, W, H))
+    assert _inside(res.point, part), \
+        f"axis overdraw broke the body (placed at {res.point})"
+    assert res.clearance_px > 100, \
+        f"clearance {res.clearance_px:.0f}px suggests a leak or sliver body"
+
+
+def test_verify_detects_faint_marking_in_void():
+    """The 8576131EA2-1D verify blind spot: at Zoom Extents the saved engraving
+    was a faint 1px stroke, invisible at geometry_delta, so verify said 'no
+    marking change detected' about a number sitting in a window cutout. The
+    low-contrast rescue pass must FAIL it."""
+    part = (120, 60, 470, 790)
+    pre = _canvas(part)
+    post = pre.copy()
+    cv2.putText(post, "8576131EA2-1D", (900, 420),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (185, 185, 185), 1)
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H))
+    assert not v.ok, f"faint marking in the void slipped past verify: {v.reason}"
+
+
+def test_verify_ignores_faint_edge_jitter():
+    """Render jitter: geometry edges re-rasterise slightly darker between the
+    two frames. Faint slivers hugging the body must NOT fail."""
+    part = (120, 60, 470, 790)
+    pre = _canvas(part)
+    post = pre.copy()
+    # Redraw the part outline 1px shifted, faintly darker than background.
+    cv2.rectangle(post, (part[0] + 1, part[1] + 1), (part[2] + 1, part[3] + 1),
+                  (200, 200, 200), 1)
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H))
+    assert v.ok, f"edge jitter wrongly FAILed: {v.reason}"
 
 
 def test_verify_fails_marking_in_the_void():

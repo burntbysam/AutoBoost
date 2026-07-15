@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.8)
+# AutoBoost Architecture (Beta 0.7.9)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -71,6 +71,22 @@ to the part/window edges and scramble the depths (heavy retry only if the gentle
 outline leaks), and the vision crop must not slice the drawing (left fraction
 0.16, matching the Design panel edge).
 
+The first live run's overlays taught three more (0.7.9). Boost's boundary
+rectangles are light GREY, not black, and a part can carry TWO of them nested
+(drawing boundary + annotation plane) -- more parity shift than one offset can
+absorb, which is how 8576131EA2-1D got its number stencilled inside a window and
+8576131EA2-09 had the 16px boundary ring picked as its body. So segmentation
+thresholds strictly on near-black first (`part_line_delta`): grey boundaries
+never enter the outline no matter how many there are, with the legacy threshold
+as fallback. Second, the coloured CAD origin marks (red X-axis line, green
+Y-axis line, blue 0,0 dot) ride exactly along the part's bottom/left edges;
+colour-saturated pixels therefore ALWAYS count as barriers, so an axis line that
+overdraws a part edge keeps that edge sealed at every threshold instead of
+opening a leak. Third, verify gained a low-contrast rescue: an engraving that
+renders as a faint 1px stroke at Zoom Extents ("no marking change detected") is
+re-detected at `verify_low_delta` with a component-area despeckle and FAILed
+when the blob sits far from the body.
+
 The clearance threshold (`PlacementConfig.required_clearance_px`) must be
 calibrated to the on-screen footprint of the ~3x expanded text. It is currently
 a placeholder and will be tuned from real screenshots.
@@ -117,7 +133,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.8)
+  __init__.py            app name + version (AutoBoost Beta 0.7.9)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
@@ -162,6 +178,14 @@ auto_id.
 
 Beta 0.7.7 -- two validated tools plus a combined runner that chains them:
 
+- **Grey boundaries, axis marks, faint markings (0.7.9)** -- from the first live
+  run's auto-saved overlays: strict near-black thresholding keeps Boost's grey
+  boundary rects (single or doubled) out of the outline entirely; colour-
+  saturated pixels (red/green axis lines, blue origin dot) always act as
+  barriers so an axis overdrawing a part edge can't open a leak; verify's
+  low-contrast rescue catches a faint marking sitting off the part. Live-run
+  scoreboard that drove this: -10/-08 correct, -09 wrong body but saved by the
+  clearance gate, -1D number stencilled in a window with verify blind to it.
 - **Placement robustness (0.7.7-0.7.8)** -- body detection moved from
   "largest enclosed region" to nesting-depth material extraction, fixing parts
   that stencilled the number outside the body (sheet-boundary void, 8604300I-1)

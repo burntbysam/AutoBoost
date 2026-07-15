@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.8** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.9** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -210,6 +210,20 @@ detect work done in a *previous* run (see roadmap).
   `logs/<version>/` on every part, and an insufficient-clearance placement now
   aborts the part instead of stamping too close to an edge. If a bad placement
   ever slips through anyway, verify FAILs it and the part is flagged and not cut.
+  0.7.9 (from the first live run's overlays): Boost's boundary rectangles render
+  light grey, not black -- and a part can carry TWO, nested (drawing boundary +
+  annotation plane), which shifted the parity beyond what one offset could fix
+  (8576131EA2-1D stencilled its number inside a window; 8576131EA2-09 picked the
+  16px boundary ring and was saved only by the clearance gate). Segmentation now
+  thresholds strictly on near-black first, so grey boundaries never enter the
+  outline no matter how many there are, falling back to the legacy threshold only
+  if nothing is found. The coloured CAD origin marks (red X-axis line, green
+  Y-axis line, blue 0,0 dot) ride exactly along the part's bottom/left edges, so
+  colour-saturated pixels always count as barriers -- an axis overdrawing an edge
+  keeps it sealed instead of opening a leak. And verify gained a low-contrast
+  rescue pass: a saved engraving that renders as a faint 1px stroke at Zoom
+  Extents (previously "no marking change detected") is re-detected at a lower
+  threshold and FAILed when it sits far from the part body.
 - **Verify gates only the clear-miss case.** The post-save check logs PASS/FAIL
   and is advisory for borderline placements (placement already guaranteed
   clearance). As of 0.7.3 it no longer prints a false FAIL when the before/after

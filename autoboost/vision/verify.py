@@ -45,22 +45,41 @@ class VerifyResult:
     debug: np.ndarray | None = None
 
 
-def _new_text_mask(pre: np.ndarray, post: np.ndarray, cfg: Config) -> np.ndarray:
-    """Pixels that became part of the (dark) geometry between pre and post."""
+def _new_text_mask(pre: np.ndarray, post: np.ndarray, cfg: Config,
+                   delta: int | None = None,
+                   keep_component_px: int | None = None) -> np.ndarray:
+    """Pixels that became part of the (dark) geometry between pre and post.
+
+    `delta` overrides the detection threshold (defaults to geometry_delta).
+    `keep_component_px` switches the despeckle from a morphological open (which
+    erases 1px-wide strokes entirely) to a connected-component area filter that
+    keeps thin-but-long strokes -- what a saved engraving looks like at Zoom
+    Extents on a large part.
+    """
+    if delta is None:
+        delta = cfg.placement.geometry_delta
     pre_g = cv2.cvtColor(pre, cv2.COLOR_BGR2GRAY)
     post_g = cv2.cvtColor(post, cv2.COLOR_BGR2GRAY)
     # Text is dark geometry on a light canvas: after-save those pixels get much
     # darker than before. (Works regardless of exact colour; if a theme inverts
     # this, the absdiff fallback below still catches the change.)
     got_darker = cv2.subtract(pre_g, post_g)
-    changed = np.where(got_darker >= cfg.placement.geometry_delta, 255, 0).astype(np.uint8)
+    changed = np.where(got_darker >= delta, 255, 0).astype(np.uint8)
     # Fall back to absolute change if darkening produced little (inverted theme).
     if cv2.countNonZero(changed) < 20:
         diff = cv2.absdiff(pre_g, post_g)
-        changed = np.where(diff >= cfg.placement.geometry_delta, 255, 0).astype(np.uint8)
-    # Remove salt noise from render jitter.
-    k = np.ones((3, 3), np.uint8)
-    changed = cv2.morphologyEx(changed, cv2.MORPH_OPEN, k)
+        changed = np.where(diff >= delta, 255, 0).astype(np.uint8)
+    if keep_component_px is None:
+        # Remove salt noise from render jitter.
+        k = np.ones((3, 3), np.uint8)
+        changed = cv2.morphologyEx(changed, cv2.MORPH_OPEN, k)
+    else:
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(changed, connectivity=8)
+        kept = np.zeros_like(changed)
+        for lbl in range(1, num):
+            if int(stats[lbl, cv2.CC_STAT_AREA]) >= keep_component_px:
+                kept[labels == lbl] = 255
+        changed = kept
     return changed
 
 
@@ -92,6 +111,37 @@ def verify_placement(
     debug[body > 0] = (0.7 * debug[body > 0] + np.array([0, 60, 0])).astype(np.uint8)
 
     if text_px < 20:
+        # No detectable change at the normal threshold. At Zoom Extents on a
+        # large part the saved engraving can be a 1px antialiased stroke that
+        # never crosses geometry_delta, so before assuming clear, re-look at a
+        # much lower threshold (with a component-area despeckle that keeps
+        # thin-but-long strokes). Only a compact blob sitting FAR from the body
+        # fails -- that is a marking in the void (how 8576131EA2-1D's number in
+        # a window slipped past as "no marking change"). Anything near the body
+        # is indistinguishable from render jitter along geometry edges, so the
+        # old assumed-clear outcome stands.
+        faint = _new_text_mask(pre_c, post_c, cfg,
+                               delta=cfg.placement.verify_low_delta,
+                               keep_component_px=6)
+        fnum, flabels, fstats, _ = cv2.connectedComponentsWithStats(faint, connectivity=8)
+        if fnum > 1:
+            biggest = max(range(1, fnum), key=lambda l: int(fstats[l, cv2.CC_STAT_AREA]))
+            blob = flabels == biggest
+            blob_px = int(fstats[biggest, cv2.CC_STAT_AREA])
+            if blob_px >= 20:
+                dist_from_body = cv2.distanceTransform(
+                    cv2.bitwise_not(body), cv2.DIST_L2, 5)
+                median_dist = float(np.median(dist_from_body[blob]))
+                outside_frac = float(np.count_nonzero(blob & (body == 0))) / blob_px
+                if median_dist > 15 and outside_frac >= 0.7:
+                    debug[blob] = (0, 0, 255)
+                    return VerifyResult(
+                        False, blob_px, int(outside_frac * blob_px),
+                        f"faint marking detected far outside the part body "
+                        f"({blob_px}px at ~{median_dist:.0f}px from the part) -- "
+                        f"placement landed in the void",
+                        debug,
+                    )
         # No detectable change between the frames -- nothing to check against
         # geometry, so don't fail. This happens when the marking was already
         # there (e.g. re-running on an already-stenciled part). A genuine

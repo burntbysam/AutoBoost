@@ -178,15 +178,19 @@ def _valid_body_mask(canvas_bgr: np.ndarray, cfg: Config) -> tuple[np.ndarray, n
 
         exterior 0  ->  part material 1  ->  hole/window 2  ->  island 3 ...
 
-    Boost draws a sheet/drawing boundary rectangle AROUND the part in Design view.
-    It inserts one extra empty level -- the gap between the boundary and the part --
-    shifting the material to depth 2. That gap can be the single largest enclosed
-    region (a narrow part on a wide sheet), and the old "largest enclosed region"
-    rule planted the part-number in it, OUTSIDE the part. The parity shift is
-    detected two independent ways (either suffices): a depth-3 region whose
-    depth-2 neighbour is big (a hole INSIDE material that is itself enclosed), or
-    the outermost outline enclosing another outline of comparable filled size
-    (the boundary around the part -- catches a part with no holes at all).
+    Boost draws light-grey boundary rectangles AROUND the part in Design view
+    (drawing boundary, and on some parts an annotation plane too -- nested). Each
+    one inserts an empty nesting level, shifting the material parity; with two of
+    them the depth-offset heuristic maxes out and the body comes out inverted
+    (ring + cutouts instead of material -- how 8576131EA2-1D got its number
+    stencilled inside a window). Since part geometry is near-black and those
+    boundaries are grey, the primary defence is the STRICT threshold pass, which
+    keeps them out of the outline entirely. For genuinely dark enclosing contours
+    (legacy-threshold fallback, DWG junk) a single parity shift is still detected
+    two independent ways (either suffices): a depth-3 region whose depth-2
+    neighbour is big (a hole INSIDE material that is itself enclosed), or the
+    outermost outline enclosing another outline of comparable filled size (covers
+    a part with no holes at all).
 
     Morphology is gentle-first (thin material strips must not weld shut -- see the
     module docstring) with one heavy retry if the gentle outline leaks.
@@ -203,23 +207,47 @@ def _valid_body_mask(canvas_bgr: np.ndarray, cfg: Config) -> tuple[np.ndarray, n
     ])
     background = int(np.median(border_px))
 
-    # Geometry = pixels that differ strongly from the background. The faint grid
+    # How far each pixel's brightness sits from the background. The faint grid
     # differs only slightly and is rejected; the dark part lines survive.
     diff = cv2.absdiff(gray, np.full_like(gray, background))
-    raw = np.where(diff >= pc.geometry_delta, 255, 0).astype(np.uint8)
 
-    outline = raw
+    # Colour saturation. Boost's CAD origin markers (red X-axis line, green
+    # Y-axis line, blue 0,0 dot) are vividly coloured, and the axis lines ride
+    # exactly along the part's bottom/left edges; geometry and the grey boundary
+    # rects are colourless. Saturated pixels are ALWAYS barriers -- an axis line
+    # that overdraws a part edge must keep acting as that edge at every
+    # threshold, or the body springs a leak right where the edge should be.
+    channel_max = canvas_bgr.max(axis=2).astype(np.int16)
+    channel_min = canvas_bgr.min(axis=2).astype(np.int16)
+    coloured = np.where(channel_max - channel_min >= pc.axis_saturation_min,
+                        255, 0).astype(np.uint8)
+
+    outline = np.zeros(gray.shape, np.uint8)
     body = np.zeros(gray.shape, np.uint8)
     k = np.ones((pc.close_kernel, pc.close_kernel), np.uint8)
 
-    # Gentle first: heavy thickening welds hole outlines to the part edge across
-    # thin material strips and corrupts the nesting depths. Escalate to heavy
-    # only when the gentle outline leaks (no body found at all).
-    attempts = ((pc.dilate_iterations, pc.close_iterations), (2, 2))
-    for dilate_it, close_it in attempts:
-        outline = cv2.dilate(raw, k, iterations=dilate_it)
-        outline = cv2.morphologyEx(outline, cv2.MORPH_CLOSE, k, iterations=close_it)
-        body = _body_from_outline(outline, pc)
+    # Attempt ladder; first threshold+morphology that yields a body wins.
+    # Threshold: STRICT first -- part geometry is near-black, while the grey
+    # boundary rects Boost draws around the part (sometimes two, nested:
+    # drawing boundary + annotation plane) must not enter the outline, or they
+    # wall off phantom rings that capture the placement or invert the body
+    # parity. Legacy threshold second, for a machine that renders geometry
+    # lighter. Morphology: gentle first -- heavy thickening welds hole outlines
+    # across thin material strips and corrupts the nesting depths -- with a
+    # heavy retry only when the gentle outline leaks (no body found at all).
+    deltas: list[int] = []
+    for d in (pc.part_line_delta, pc.geometry_delta):
+        if d not in deltas:
+            deltas.append(d)
+    for delta in deltas:
+        raw = np.where(diff >= delta, 255, 0).astype(np.uint8)
+        raw = cv2.bitwise_or(raw, coloured)
+        for dilate_it, close_it in ((pc.dilate_iterations, pc.close_iterations), (2, 2)):
+            outline = cv2.dilate(raw, k, iterations=dilate_it)
+            outline = cv2.morphologyEx(outline, cv2.MORPH_CLOSE, k, iterations=close_it)
+            body = _body_from_outline(outline, pc)
+            if cv2.countNonZero(body) > 0:
+                break
         if cv2.countNonZero(body) > 0:
             break
 

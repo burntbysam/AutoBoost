@@ -56,6 +56,30 @@ class PlacementConfig:
     # dark part geometry and ignores the low-contrast grid. Works for either
     # polarity (dark-on-light or light-on-dark) because it uses |value - bg|.
     geometry_delta: int = 80
+    # PART geometry is drawn near-black; the boundary rectangles Boost adds
+    # around the part (drawing boundary, annotation plane -- a part can carry
+    # BOTH, nested) render light grey. Segmentation uses this stricter
+    # threshold first so those boundaries never enter the outline at all:
+    # with them in, they wall off phantom enclosed rings that either capture
+    # the placement (8576131EA2-09) or shift the nesting parity so the body
+    # comes out inverted (8576131EA2-1D stencilled its number inside a window
+    # cutout). If nothing is found at this threshold -- a machine that renders
+    # geometry lighter -- segmentation falls back to geometry_delta.
+    part_line_delta: int = 150
+    # Verify-only low-contrast threshold. At Zoom Extents a saved engraving can
+    # be a 1px antialiased stroke that never crosses geometry_delta ("no marking
+    # change detected"); the rescue pass re-looks at this delta so a marking
+    # that landed OFF the part is still caught.
+    verify_low_delta: int = 40
+    # Boost draws the CAD origin markers in colour: red X-axis line, green
+    # Y-axis line, blue 0,0 dot -- and the axis lines ride exactly along the
+    # part's bottom/left edges (the origin is the part corner). Real geometry
+    # and the grey boundary rects are colourless, so saturation separates them:
+    # any pixel at least this saturated is ALWAYS treated as a barrier,
+    # regardless of brightness. That keeps an axis line that overdraws a part
+    # edge acting as that edge (no leak at any threshold), while never letting
+    # the grey boundaries back into the outline.
+    axis_saturation_min: int = 60
     # Dilation/close to seal small gaps in the outline so regions are watertight.
     # GENTLE by default: hex holes sitting in a ~30px material strip weld to the
     # neighbouring part/window edges at 2 iterations, corrupting the region
