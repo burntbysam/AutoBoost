@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.10** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.11** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -46,6 +46,14 @@ the marking is clear of edges/holes → close → next part.
   with zoom. It takes the roomiest spot the rectangle fits and aborts the part if
   the number can't fit anywhere clear. `char_advance_ratio` and `text_margin_frac`
   in `config.py` calibrate the footprint against a real saved engraving.
+- **Placement self-checks against reality** (0.7.11): the exterior is seeded
+  from a margin band so UI artifacts at the crop edges can't invert the body,
+  and the detected body's aspect ratio must match the part's real dimensions
+  (within 1.6x) or the part is aborted instead of stamped.
+- **Verify sees the marking as it really renders** (0.7.11): the saved
+  engraving is yellow, so it's detected by colour-saturation gain as well as
+  darkening, and line-shaped re-render artifacts (axis lines, the hint-text
+  row) are discarded instead of being flagged as out-of-body markings.
 - **Navigation** (parts list, open/save/close, the Properties/font chain) is
   driven by Windows UI Automation where possible — no fragile image templates —
   with mouse/keyboard for the two owner-drawn dropdowns and the drawing canvas.

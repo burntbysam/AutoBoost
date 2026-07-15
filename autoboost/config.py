@@ -64,13 +64,31 @@ class PlacementConfig:
     # the placement (8576131EA2-09) or shift the nesting parity so the body
     # comes out inverted (8576131EA2-1D stencilled its number inside a window
     # cutout). If nothing is found at this threshold -- a machine that renders
-    # geometry lighter -- segmentation falls back to geometry_delta.
-    part_line_delta: int = 150
+    # geometry lighter -- segmentation falls back to geometry_delta. Measured
+    # on the workstation (0.7.10 run): part lines ~58 grey (diff ~190), the
+    # boundary rects ~174 grey (diff ~74) -- 120 keeps a wide margin on both
+    # sides while tolerating lines antialiased lighter than the 150 that made
+    # the strict pass leak on 8604300I-1.
+    part_line_delta: int = 120
+    # Free regions overlapping this many pixels of the crop's outer edge count
+    # as exterior, not only regions touching the exact border row/col. Live
+    # 8604300I-1 failure: faint UI junk AT the crop edges (hint-text row, icon
+    # strip, viewport frame line) walled three borders at the legacy threshold,
+    # so the whole background read as "enclosed", became the body, and the
+    # number was stamped in the void. A margin band can't be walled off by
+    # 1-3px edge artifacts.
+    exterior_band_px: int = 10
     # Verify-only low-contrast threshold. At Zoom Extents a saved engraving can
     # be a 1px antialiased stroke that never crosses geometry_delta ("no marking
     # change detected"); the rescue pass re-looks at this delta so a marking
     # that landed OFF the part is still caught.
     verify_low_delta: int = 40
+    # The saved engraving renders YELLOW on the MarkedText layer (live 0.7.10
+    # frames): its brightness barely differs from the canvas (~19 grey levels,
+    # invisible to a darkness diff) but its colour saturation jumps ~200.
+    # Verify therefore also detects the marking as a saturation INCREASE of at
+    # least this much between the clean and post-save frames.
+    verify_sat_delta: int = 60
     # Boost draws the CAD origin markers in colour: red X-axis line, green
     # Y-axis line, blue 0,0 dot -- and the axis lines ride exactly along the
     # part's bottom/left edges (the origin is the part corner). Real geometry

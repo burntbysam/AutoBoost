@@ -303,6 +303,80 @@ def test_verify_assumes_clear_for_edge_sliver():
     assert v.ok, f"edge sliver wrongly FAILed: {v.reason}"
 
 
+def test_walled_crop_edges_still_finds_part():
+    """Live 8604300I-1 failure (0.7.10): faint UI junk at the crop edges walled
+    three borders, the background read as 'enclosed', became the body, and the
+    number was stamped in the void. With band-seeded exteriors the background
+    must stay exterior no matter what hugs the border rows."""
+    img = np.full((H, W, 3), 245, np.uint8)
+    part = (620, 40, 990, 800)                   # narrow portrait part
+    cv2.rectangle(img, part[:2], part[2:], (58, 58, 58), 1)
+    for i in range(4):
+        cx = int(part[0] + (i + 1) * (part[2] - part[0]) / 5)
+        cv2.circle(img, (cx, part[1] + 25), 6, (58, 58, 58), 1)
+        cv2.circle(img, (cx, part[3] - 25), 6, (58, 58, 58), 1)
+    img[0:3, :] = (90, 90, 90)                   # hint-text row walls the top
+    img[-3:, :] = (90, 90, 90)                   # icon strip walls the bottom
+    img[:, -3:] = (90, 90, 90)                   # viewport line walls the right
+    res = find_safe_placement(img, DEFAULT, (0, 0, W, H))
+    assert _inside(res.point, part), \
+        f"walled crop edges inverted the body again: {res.point} ({res.reason})"
+
+
+def test_aspect_gate_aborts_on_mismatch():
+    """The real part dimensions are ground truth: if the detected body's aspect
+    is wildly off the part's real aspect, segmentation grabbed something that is
+    not the part -- abort instead of stamping (the 0.7.10 void stamp)."""
+    part = (120, 200, 1490, 640)                 # landscape body on screen
+    img = _canvas(part)
+    res = find_safe_placement(img, DEFAULT, (0, 0, W, H),
+                              part_dims_mm=(592.0, 1106.0),   # claims portrait
+                              char_count=10)
+    assert not res.ok and "mismatch" in res.reason, \
+        f"aspect mismatch should abort: {res.reason}"
+
+
+def _yellow_text(img, org, scale=0.7):
+    cv2.putText(img, "8604305I-1__01", org,
+                cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 230, 230), 1)
+
+
+def test_verify_detects_yellow_marking_on_material():
+    # The engraving renders YELLOW: bright (invisible to a darkness diff) but
+    # vividly saturated. On material it must be DETECTED and PASS.
+    part = (120, 60, 1400, 790)
+    pre = _canvas(part)
+    post = pre.copy()
+    _yellow_text(post, (700, 420))
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H))
+    assert v.ok, f"yellow marking on material should PASS: {v.reason}"
+    assert v.text_px >= 20, \
+        f"yellow marking should be DETECTED, not 'no change' ({v.reason})"
+
+
+def test_verify_fails_yellow_marking_in_void():
+    part = (120, 60, 470, 790)
+    pre = _canvas(part)
+    post = pre.copy()
+    _yellow_text(post, (1000, 420))              # out in the void
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H))
+    assert not v.ok, f"yellow marking in the void must FAIL: {v.reason}"
+
+
+def test_verify_ignores_shifted_axis_line():
+    """Live false-FAILs (0.7.10, parts 2-5): the red/green axis lines and the
+    hint-text row re-render a couple of px away between the clean and post
+    frames; those long thin slivers were flagged as 'markings far outside the
+    body'. Line-shaped components must be discarded."""
+    part = (120, 60, 1400, 790)
+    pre = _canvas(part)
+    pre[794:796, :] = (0, 0, 255)                # red X axis in the clean frame
+    post = _canvas(part)
+    post[796:798, :] = (0, 0, 255)               # ...shifted 2px in the post frame
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H))
+    assert v.ok, f"shifted axis line wrongly FAILed: {v.reason}"
+
+
 def test_text_rectangle_is_wide_and_fits_on_material():
     # A wide part (real 1000mm x 300mm) that fills a ~1450px-wide body: a 13-char
     # number reserves a WIDE, SHORT rectangle and must fit on the material.

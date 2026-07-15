@@ -280,8 +280,21 @@ def _body_from_outline(outline: np.ndarray, pc) -> np.ndarray:
     if num <= 1:
         return body
 
-    # Any label appearing on the image border is exterior background.
+    # Exterior = any region overlapping the crop's outer margin band, not only
+    # the exact border row/col. Faint UI artifacts at the crop edges (hint-text
+    # row, icon strip, viewport frame lines) can wall the exact border at the
+    # legacy threshold; when that happened live, the whole background read as
+    # "enclosed", became the body, and the number was stamped in the void
+    # (8604300I-1, 0.7.10 run). A 1-3px edge wall cannot fence off a 10px band.
     border = set(labels[0, :]) | set(labels[-1, :]) | set(labels[:, 0]) | set(labels[:, -1])
+    band = pc.exterior_band_px
+    if band > 0:
+        band_mask = np.zeros(labels.shape, bool)
+        band_mask[:band, :] = True
+        band_mask[-band:, :] = True
+        band_mask[:, :band] = True
+        band_mask[:, -band:] = True
+        border |= set(int(l) for l in np.unique(labels[band_mask & (labels > 0)]))
 
     depth, adjacency = _region_depths(num, labels, border, outline)
 
@@ -398,6 +411,28 @@ def find_safe_placement(
 
     if cv2.countNonZero(body) == 0:
         return PlacementResult(None, 0.0, False, "no part body detected", debug)
+
+    # Sanity gate: the real part dimensions are ground truth. Zoom is uniform, so
+    # the detected body's bounding-box aspect must roughly match the part's real
+    # aspect; a gross mismatch means segmentation latched onto something that is
+    # NOT the part (live 0.7.10: an inverted body spanned the whole canvas,
+    # aspect 2.1 landscape, for a 0.54-aspect portrait part -- and stamped the
+    # void). Better to abort and flag than to stamp on a lie.
+    if part_dims_mm and part_dims_mm[0] > 0 and part_dims_mm[1] > 0:
+        ys, xs = np.where(body > 0)
+        bw = int(xs.max() - xs.min()) + 1
+        bh = int(ys.max() - ys.min()) + 1
+        body_aspect = bw / max(1, bh)
+        dims_aspect = part_dims_mm[0] / part_dims_mm[1]
+        mismatch = max(body_aspect / dims_aspect, dims_aspect / body_aspect)
+        if mismatch > 1.6:
+            return PlacementResult(
+                None, 0.0, False,
+                f"segmentation mismatch: body {bw}x{bh}px (aspect {body_aspect:.2f}) "
+                f"vs part {part_dims_mm[0]:.0f}x{part_dims_mm[1]:.0f}mm "
+                f"(aspect {dims_aspect:.2f}) -- not the part, aborting",
+                debug,
+            )
 
     # Distance transform: each body pixel -> distance to nearest non-body pixel.
     # Used to choose the most generous spot in either mode.

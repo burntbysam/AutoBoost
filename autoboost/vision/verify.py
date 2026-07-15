@@ -45,42 +45,62 @@ class VerifyResult:
     debug: np.ndarray | None = None
 
 
+def _saturation(bgr: np.ndarray) -> np.ndarray:
+    """Per-pixel colour saturation (max channel - min channel), int16."""
+    return bgr.max(axis=2).astype(np.int16) - bgr.min(axis=2).astype(np.int16)
+
+
 def _new_text_mask(pre: np.ndarray, post: np.ndarray, cfg: Config,
                    delta: int | None = None,
-                   keep_component_px: int | None = None) -> np.ndarray:
-    """Pixels that became part of the (dark) geometry between pre and post.
+                   keep_component_px: int = 6) -> np.ndarray:
+    """Pixels where the saved marking appeared between pre and post.
 
-    `delta` overrides the detection threshold (defaults to geometry_delta).
-    `keep_component_px` switches the despeckle from a morphological open (which
-    erases 1px-wide strokes entirely) to a connected-component area filter that
-    keeps thin-but-long strokes -- what a saved engraving looks like at Zoom
-    Extents on a large part.
+    Two channels, OR'd (live 0.7.10 frames drove this):
+      - darkening: dark engraving ink on a light canvas (threshold `delta`,
+        defaults to geometry_delta; absdiff fallback for inverted themes);
+      - saturation gain: the engraving actually renders YELLOW on the
+        MarkedText layer -- nearly invisible to a brightness diff (~19 grey
+        levels) but a ~200-point saturation jump (verify_sat_delta).
+
+    Cleanup is a connected-component pass (a 3x3 open would erase the 1px-wide
+    strokes a Zoom-Extents engraving is made of): components smaller than
+    keep_component_px are noise, and components shaped like UI re-renders are
+    dropped -- extremely elongated (axis lines, the hint-text row: the live run
+    flagged those as "markings" and failed four good parts), hollow line-work
+    (a re-rendered rectangle outline), or hugging the crop edge (scrollbars,
+    viewport frame). A real marking is a compact text blob well inside the crop.
     """
     if delta is None:
         delta = cfg.placement.geometry_delta
     pre_g = cv2.cvtColor(pre, cv2.COLOR_BGR2GRAY)
     post_g = cv2.cvtColor(post, cv2.COLOR_BGR2GRAY)
-    # Text is dark geometry on a light canvas: after-save those pixels get much
-    # darker than before. (Works regardless of exact colour; if a theme inverts
-    # this, the absdiff fallback below still catches the change.)
     got_darker = cv2.subtract(pre_g, post_g)
     changed = np.where(got_darker >= delta, 255, 0).astype(np.uint8)
-    # Fall back to absolute change if darkening produced little (inverted theme).
     if cv2.countNonZero(changed) < 20:
         diff = cv2.absdiff(pre_g, post_g)
         changed = np.where(diff >= delta, 255, 0).astype(np.uint8)
-    if keep_component_px is None:
-        # Remove salt noise from render jitter.
-        k = np.ones((3, 3), np.uint8)
-        changed = cv2.morphologyEx(changed, cv2.MORPH_OPEN, k)
-    else:
-        num, labels, stats, _ = cv2.connectedComponentsWithStats(changed, connectivity=8)
-        kept = np.zeros_like(changed)
-        for lbl in range(1, num):
-            if int(stats[lbl, cv2.CC_STAT_AREA]) >= keep_component_px:
-                kept[labels == lbl] = 255
-        changed = kept
-    return changed
+    sat_gain = _saturation(post) - _saturation(pre)
+    changed = cv2.bitwise_or(
+        changed,
+        np.where(sat_gain >= cfg.placement.verify_sat_delta, 255, 0).astype(np.uint8))
+
+    h, w = changed.shape[:2]
+    EDGE = 10           # px; components whose bbox hugs the crop edge = UI junk
+    MAX_ASPECT = 40     # a marking is ~5-20:1; axis/hint lines are 100s:1
+    MIN_FILL = 0.05     # hollow line-work (a shifted rectangle ring) fills <5%
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(changed, connectivity=8)
+    kept = np.zeros_like(changed)
+    for lbl in range(1, num):
+        x, y, bw, bh, area = (int(v) for v in stats[lbl])
+        if area < keep_component_px:
+            continue
+        aspect = max(bw, bh) / max(1, min(bw, bh))
+        fill = area / max(1, bw * bh)
+        near_edge = x < EDGE or y < EDGE or x + bw > w - EDGE or y + bh > h - EDGE
+        if aspect > MAX_ASPECT or fill < MIN_FILL or near_edge:
+            continue
+        kept[labels == lbl] = 255
+    return kept
 
 
 def verify_placement(

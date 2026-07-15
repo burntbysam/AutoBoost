@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.10)
+# AutoBoost Architecture (Beta 0.7.11)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -87,6 +87,24 @@ renders as a faint 1px stroke at Zoom Extents ("no marking change detected") is
 re-detected at `verify_low_delta` with a component-area despeckle and FAILed
 when the blob sits far from the body.
 
+The second live run (0.7.10 logs + overlays, replayed against the actual PNGs)
+drove 0.7.11. On one part, faint UI junk AT the crop edges (hint-text row, icon
+strip, viewport frame line) walled three of the four borders at the legacy
+threshold; the whole background then read as "enclosed", became the body, and
+the number was stamped in the void again. Exterior regions are now seeded from a
+10px margin band (`exterior_band_px`) that 1-3px edge artifacts cannot wall off,
+and the strict threshold dropped to 120 (measured: part lines diff ~190,
+boundary rects ~74). The part's REAL dimensions now also act as a sanity gate:
+zoom is uniform, so the detected body's bbox aspect must match the real aspect
+within 1.6x, else the placement aborts -- segmentation grabbed something that is
+not the part. Verify was rebuilt around what the marking actually looks like:
+the saved engraving is YELLOW (a ~200-point saturation jump but only ~19 grey
+levels of darkening, invisible to a brightness diff), so detection is
+darkening OR saturation-gain (`verify_sat_delta`); and the four false FAILs in
+that run were re-rendered axis lines / hint text -- line-shaped components
+(extreme bbox aspect, hollow line-work, or hugging the crop edge) are discarded
+before judging.
+
 Because the saved engraving is a WIDE, SHORT strip, placement reserves a
 RECTANGLE of the text footprint rather than a circle (0.7.10): a point is valid
 only if the whole footprint (erode the body by that rectangle) is clear, and
@@ -142,7 +160,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.10)
+  __init__.py            app name + version (AutoBoost Beta 0.7.11)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
