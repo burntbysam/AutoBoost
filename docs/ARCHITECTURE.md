@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.13)
+# AutoBoost Architecture (Beta 0.7.14)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -134,6 +134,18 @@ falls back to the isotropic circle against `required_clearance_px`.
 `char_advance_ratio` / `text_margin_frac` calibrate the footprint to a real saved
 engraving.
 
+The first clean 17/17 run (0.7.13, elapsed-stamped log) profiled the cycle at
+~78s/part, and the hot spots are all the WinForms-UIA bridge, not Boost:
+`read_dimensions` cost ~13s/part in two full descendants() walks of the Design
+window, the first property-grid resolution ~similar, part-open ~11s. 0.7.14
+starts trimming: the Dimensions Edit's screen rect is cached across parts (the
+panel never moves in a maximized window) and later parts resolve it with an
+O(1) from_point hit-test, guarded by a type/format check that falls back to
+the full walk; pyautogui's hidden 0.1s after-every-call pause is halved (the
+cycles sleep explicitly anyway); the Design-open wait polls at 0.2s instead of
+~2s granularity. The per-part log also gained 'dimensions:' and 'property grid
+ready' lines so the stamps attribute the remaining cost precisely.
+
 Every vision module is runnable **standalone against a saved PNG** and emits a
 debug overlay, so the algorithms can be iterated from screenshots without driving
 live Boost -- the primary development feedback loop.
@@ -176,7 +188,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.13)
+  __init__.py            app name + version (AutoBoost Beta 0.7.14)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/

@@ -131,10 +131,13 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
     #    back to the isotropic circle.
     rect = _canvas_rect(boost)
     part_dims_mm = None
+    dims_text = ""
     try:
-        part_dims_mm = _parse_dims_mm(boost.read_dimensions())
+        dims_text = boost.read_dimensions()
+        part_dims_mm = _parse_dims_mm(dims_text)
     except Exception:
         part_dims_mm = None
+    log(f"dimensions: {dims_text!r} -> {part_dims_mm}")
     char_count = len(part_name) if part_name else None
     clean = _shot_bgr()
     res = find_safe_placement(clean, DEFAULT, rect,
@@ -174,7 +177,12 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
     log(f"selected placed text (click at {sx},{sy})")
 
     # 5. Font: add the Font type property if absent, then set EasyType-L=10mm.
-    if "Font type" not in boost._grid_controls()["buttons"]:
+    # The first grid read of a part resolves the property grid + table across
+    # the WinForms-UIA bridge -- logged separately so the stamps show whether
+    # the time goes to that resolution or to the add/set steps.
+    grid_buttons = boost._grid_controls()["buttons"]
+    log("property grid ready")
+    if "Font type" not in grid_buttons:
         added = boost.add_font_type()
         log(f"add Font type -> {added} ({boost.last_value})")
         if not added:

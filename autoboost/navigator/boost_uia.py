@@ -79,7 +79,20 @@ class BoostUIA:
         self._grid = None
         self._table = None
         self._options = None
+        self._dims_rect = None  # screen rect of the Dimensions Edit; survives
+                                # reset() -- the panel sits at the same spot in
+                                # every maximized Design window, so later parts
+                                # hit-test it instead of re-walking the tree
         self.last_value = ""   # last value observed by a set operation (for tests)
+        # pyautogui inserts a 0.1s pause after EVERY call by default. The cycles
+        # already sleep explicitly after each action, so that hidden pause is
+        # pure overhead (~2s/part across dozens of calls). Halve it, keep a
+        # margin for RDP input delivery.
+        try:
+            import pyautogui
+            pyautogui.PAUSE = 0.05
+        except Exception:
+            pass
 
     # -- window handles -----------------------------------------------------
     # Window/grid specs are cached: resolving them re-searches the UIA tree,
@@ -110,9 +123,9 @@ class BoostUIA:
         except Exception:
             return False
 
-    def has_design(self) -> bool:
+    def has_design(self, timeout: float = 1) -> bool:
         try:
-            return self.design().exists(timeout=1)
+            return self.design().exists(timeout=timeout)
         except Exception:
             return False
 
@@ -271,10 +284,13 @@ class BoostUIA:
                 return False
 
         self.reset()                      # a new Design window is opening
-        for _ in range(timeout):
-            if self.has_design():
+        # Fine-grained poll: a 1s sleep + 1s exists-timeout made the granularity
+        # ~2s, wasting up to that long AFTER the window was already up.
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.has_design(timeout=0.2):
                 return True
-            time.sleep(1)
+            time.sleep(0.2)
         self.last_value = "<Design view did not open>"
         return False
 
@@ -745,12 +761,40 @@ class BoostUIA:
 
     # -- Design: dimensions & property grid ---------------------------------
 
+    def _dims_value_at(self, rect) -> str:
+        """Hit-test the cached Dimensions-Edit rect and read its value. Returns
+        '' unless the element there is an Edit whose value looks like dimensions
+        ('12.3 in x 4 in') -- any doubt falls back to the full tree walk."""
+        import re
+        try:
+            cx = (rect[0] + rect[2]) // 2
+            cy = (rect[1] + rect[3]) // 2
+            elem = self.desktop.from_point(cx, cy)
+            if elem.element_info.control_type != "Edit":
+                return ""
+            val = _value(elem)
+            return val if re.search(r"[\d.]+\s*(in|mm)?\s*[xX]\s*[\d.]+", val or "") else ""
+        except Exception:
+            return ""
+
     def read_dimensions(self) -> str:
         """Read the Design 'Dimensions' field, e.g. '18.2 in x 10 in'.
 
         Found positionally: the Edit immediately right of the 'Dimensions' label
         on the same row. Structure-independent so it survives layout changes.
+
+        The positional find costs two full descendants() walks over the Design
+        window -- 10s+ across the WinForms-UIA bridge, the single slowest step of
+        the 0.7.13 profiled run. The Edit sits at the same screen position in
+        every maximized Design window, so after one successful find its rect is
+        cached and later parts resolve it with an O(1) hit-test; a type/format
+        check rejects anything unexpected there and re-runs the full walk.
         """
+        if self._dims_rect is not None:
+            val = self._dims_value_at(self._dims_rect)
+            if val:
+                return val
+            self._dims_rect = None      # layout changed -- re-find from scratch
         design = self.design().wrapper_object()
         labels = [t for t in design.descendants(control_type="Text")
                   if _text(t) == "Dimensions"]
@@ -764,7 +808,11 @@ class BoostUIA:
             to_right = lr.right - 5 <= er.left <= lr.right + 250
             if same_row and to_right and (best_left is None or er.left < best_left):
                 best, best_left = e, er.left
-        return _value(best) if best is not None else ""
+        if best is None:
+            return ""
+        br = best.rectangle()
+        self._dims_rect = (br.left, br.top, br.right, br.bottom)
+        return _value(best)
 
     def _property_grid(self):
         if self._grid is None:
