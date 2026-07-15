@@ -55,6 +55,17 @@ from . import updater
 DEFAULT_FONT = "EasyType-L=10mm"
 
 
+def format_elapsed(seconds: float) -> str:
+    """Elapsed-time stamp for log lines: [mm:ss.t], hours added if a run gets
+    that long. Tenths are enough -- the queue poll batches at 100ms anyway."""
+    tenths = int(round(max(0.0, seconds) * 10))   # round FIRST or 59.96 -> 00:60.0
+    m, s = divmod(tenths / 10, 60)
+    h, m = divmod(int(m), 60)
+    if h:
+        return f"[{h}:{m:02d}:{s:04.1f}]"
+    return f"[{int(m):02d}:{s:04.1f}]"
+
+
 class _Done:
     """Sentinel the worker puts on the queue when the job ends."""
 
@@ -87,6 +98,8 @@ class App:
         self.q: queue.Queue = queue.Queue()
         self.worker: threading.Thread | None = None
         self._cancelled = False
+        self._t0 = time.monotonic()   # program start; every log line is stamped
+                                      # with the elapsed time since this moment
         self._build()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._append(f"{__release__} -- control panel")
@@ -167,8 +180,14 @@ class App:
     # ------------------------------------------------------------------- log
 
     def _append(self, msg: str) -> None:
+        # Stamp every printed line with the elapsed time since launch, so a
+        # saved log shows where the seconds go. Blank lines stay blank (the
+        # ===== START banner leads with one).
+        stamp = format_elapsed(time.monotonic() - self._t0)
+        text = "\n".join(f"{stamp} {line}" if line.strip() else line
+                         for line in str(msg).split("\n"))
         self.log.configure(state="normal")
-        self.log.insert("end", msg + "\n")
+        self.log.insert("end", text + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
 
