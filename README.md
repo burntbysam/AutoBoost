@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.9** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.10** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -38,9 +38,14 @@ part-number → zoom in and select it → add the `Font type` property → set
 `EasyType-L=10mm` → deselect → save (text becomes engraving geometry) → verify
 the marking is clear of edges/holes → close → next part.
 
-- **Placement** uses a distance transform to pick the point of maximum clearance
-  inside the part body (holes excluded), so the number never lands in a slot,
-  hole, or against an edge.
+- **Placement** picks the point of maximum clearance inside the part body (holes
+  and cutouts excluded), so the number never lands in a slot, hole, or against an
+  edge. Because the engraving is a wide, short strip, placement reserves a
+  RECTANGLE matching the text footprint (0.7.10), not a circle -- sized from the
+  part's real dimensions (read via UIA) and the number's length, so it scales
+  with zoom. It takes the roomiest spot the rectangle fits and aborts the part if
+  the number can't fit anywhere clear. `char_advance_ratio` and `text_margin_frac`
+  in `config.py` calibrate the footprint against a real saved engraving.
 - **Navigation** (parts list, open/save/close, the Properties/font chain) is
   driven by Windows UI Automation where possible — no fragile image templates —
   with mouse/keyboard for the two owner-drawn dropdowns and the drawing canvas.

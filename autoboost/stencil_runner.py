@@ -105,7 +105,7 @@ def run_job(part_names: list[str] | None = None,
         try:
             ok = process_open_part(target_font, do_save=do_save,
                                    do_close=do_close, log=lambda m: log("  " + m),
-                                   boost=boost)
+                                   boost=boost, part_name=name)
         except Exception as exc:  # noqa: BLE001 - keep the job alive
             log(f"  cycle error: {exc!r}")
             ok = False

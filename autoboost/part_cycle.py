@@ -77,11 +77,31 @@ def _canvas_rect(boost) -> tuple[int, int, int, int]:
     return (r.left + 300, r.top + 190, r.right - 10, r.bottom - 45)
 
 
+def _parse_dims_mm(text: str) -> tuple[float, float] | None:
+    """Parse Boost's Dimensions field, e.g. '40.3 in x 12.6 in' or '18 mm x 9 mm',
+    into (width, height) millimetres. Returns None if it can't be read."""
+    import re
+    m = re.search(r"([\d.]+)\s*(in|mm)?\s*[xX]\s*([\d.]+)\s*(in|mm)?", text or "")
+    if not m:
+        return None
+    try:
+        w = float(m.group(1))
+        h = float(m.group(3))
+    except ValueError:
+        return None
+    unit = (m.group(4) or m.group(2) or "in").lower()
+    scale = 25.4 if unit == "in" else 1.0
+    if w <= 0 or h <= 0:
+        return None
+    return w * scale, h * scale
+
+
 def process_open_part(target_font: str = "EasyType-L=10mm",
                       do_save: bool = False,
                       do_close: bool = False,
                       log=print,
-                      boost: BoostUIA | None = None) -> bool:
+                      boost: BoostUIA | None = None,
+                      part_name: str | None = None) -> bool:
     import pyautogui
     from .vision.placement import find_safe_placement
     from .vision.verify import verify_placement
@@ -106,9 +126,19 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
 
     # 2. Safe placement from the current canvas. Keep this clean pre-placement
     #    frame -- verify diffs against it later (the marking is the difference).
+    #    Feed the part's real dimensions + number length so placement reserves a
+    #    rectangle matching the wide/short engraving; any read failure just falls
+    #    back to the isotropic circle.
     rect = _canvas_rect(boost)
+    part_dims_mm = None
+    try:
+        part_dims_mm = _parse_dims_mm(boost.read_dimensions())
+    except Exception:
+        part_dims_mm = None
+    char_count = len(part_name) if part_name else None
     clean = _shot_bgr()
-    res = find_safe_placement(clean, DEFAULT, rect)
+    res = find_safe_placement(clean, DEFAULT, rect,
+                              part_dims_mm=part_dims_mm, char_count=char_count)
     log(f"placement: point={res.point} clearance={res.clearance_px:.0f}px "
         f"ok={res.ok} ({res.reason})")
     _save_debug(res.debug, "placement", log)

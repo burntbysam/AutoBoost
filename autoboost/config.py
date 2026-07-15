@@ -94,11 +94,26 @@ class PlacementConfig:
     # Extra safety erosion of the valid body mask, in pixels, before the
     # distance transform. Accounts for line thickness and small render blur.
     body_erode_px: int = 3
-    # Minimum clearance (radius, px) required at the chosen point for the
-    # placement to be considered safe. This is the single most important knob
-    # and MUST be calibrated from real screenshots once we know the on-screen
-    # size of the ~3x expanded text. Placeholder until calibrated.
+    # Minimum clearance (radius, px) required at the chosen point when the text
+    # footprint is UNKNOWN (no part dimensions / part number available). Used only
+    # by the isotropic-circle fallback; the rectangular path below supersedes it.
     required_clearance_px: int = 45
+
+    # --- Part-number text footprint (rectangular clearance) ---
+    # The saved engraving is a WIDE, SHORT strip, not a disc: EasyType-L is 10mm
+    # tall and each glyph advances ~0.7x its height, so an N-character number is
+    # about 0.7*N*10mm wide by 10mm tall. Placement reserves a RECTANGLE of that
+    # footprint (plus a margin) and requires it clear of every edge/hole/cutout,
+    # instead of a circle that would over-reserve in Y and under-reserve in X.
+    # The rectangle is sized in millimetres and converted to pixels using the
+    # on-screen scale derived from the part's REAL dimensions (read via UIA) and
+    # its on-screen size, so it tracks Zoom Extents automatically. Falls back to
+    # the isotropic circle above when dimensions or the part number are missing.
+    # char_advance_ratio and text_margin_frac are the two calibration knobs.
+    font_height_mm: float = 10.0         # EasyType-L cap height
+    char_advance_ratio: float = 0.7      # glyph advance width / height
+    text_margin_frac: float = 0.4        # extra clearance each side, as a
+                                         # fraction of the text height
 
 
 @dataclass

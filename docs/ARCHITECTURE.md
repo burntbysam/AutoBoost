@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.9)
+# AutoBoost Architecture (Beta 0.7.10)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -87,9 +87,18 @@ renders as a faint 1px stroke at Zoom Extents ("no marking change detected") is
 re-detected at `verify_low_delta` with a component-area despeckle and FAILed
 when the blob sits far from the body.
 
-The clearance threshold (`PlacementConfig.required_clearance_px`) must be
-calibrated to the on-screen footprint of the ~3x expanded text. It is currently
-a placeholder and will be tuned from real screenshots.
+Because the saved engraving is a WIDE, SHORT strip, placement reserves a
+RECTANGLE of the text footprint rather than a circle (0.7.10): a point is valid
+only if the whole footprint (erode the body by that rectangle) is clear, and
+among valid points it takes the one with the most isotropic breathing room. The
+footprint is sized in millimetres (font_height_mm, char_advance_ratio, number
+length) and converted to pixels via the part's on-screen scale -- its body
+bounding box in px against its real dimensions read from the Design 'Dimensions'
+field -- so it tracks Zoom Extents. If the number can't fit anywhere the part is
+aborted (flagged, not stamped). When dimensions or the number are unavailable it
+falls back to the isotropic circle against `required_clearance_px`.
+`char_advance_ratio` / `text_margin_frac` calibrate the footprint to a real saved
+engraving.
 
 Every vision module is runnable **standalone against a saved PNG** and emits a
 debug overlay, so the algorithms can be iterated from screenshots without driving
@@ -133,7 +142,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.9)
+  __init__.py            app name + version (AutoBoost Beta 0.7.10)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/

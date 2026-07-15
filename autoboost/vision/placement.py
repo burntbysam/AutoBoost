@@ -28,7 +28,11 @@ Pipeline (all on the Design-View canvas, after Zoom Extents):
        the exterior, the holes/large window cutouts, AND the void between the part
        and the sheet/drawing boundary -- the rectangle Boost draws around the part
        in Design view -- that used to capture the placement on narrow parts.
-    5. Erode slightly for line thickness, distance-transform, take the max.
+    5. Reserve the text footprint. The saved engraving is a WIDE, SHORT strip, so
+       when the part's real dimensions and the part number are known the search
+       reserves a RECTANGLE of that footprint (sized from the on-screen scale) and
+       takes the roomiest spot where it fits clear; otherwise it falls back to the
+       isotropic circle (distance-transform max) against required_clearance_px.
 
 Run standalone against a saved screenshot to see the choice and a debug overlay:
 
@@ -55,10 +59,13 @@ class PlacementResult:
     """Outcome of a placement search.
 
     point:        (x, y) in FULL-screen pixel coordinates, or None if no body found.
-    clearance_px: distance from `point` to the nearest edge/hole (safety radius).
-    ok:           clearance_px >= required_clearance_px.
+    clearance_px: isotropic clearance at `point` (distance to nearest edge/hole).
+    ok:           the reserved footprint fits clear (rectangle) or clearance meets
+                  the required radius (circle fallback).
     reason:       human-readable explanation, for logging.
     debug:        BGR overlay image (canvas-cropped) for inspection.
+    half_extent:  (hx, hy) px half-width/half-height of the reserved text rectangle
+                  when sized from the part dimensions; None for the circle fallback.
     """
 
     point: tuple[int, int] | None
@@ -66,6 +73,7 @@ class PlacementResult:
     ok: bool
     reason: str
     debug: np.ndarray | None = None
+    half_extent: tuple[int, int] | None = None
 
 
 def _outline_thickness(outline: np.ndarray) -> int:
@@ -318,15 +326,58 @@ def body_mask(canvas_bgr: np.ndarray, cfg: Config = DEFAULT) -> np.ndarray:
     return body
 
 
+def _text_rect_px(body: np.ndarray,
+                  part_dims_mm: tuple[float, float] | None,
+                  char_count: int | None,
+                  cfg: Config) -> tuple[int, int] | None:
+    """Half-width/half-height (px) of the rectangle to reserve for the saved
+    part-number engraving, or None if it can't be sized (missing inputs).
+
+    The engraving is char_count glyphs of a font_height_mm-tall font, each glyph
+    advancing char_advance_ratio of its height, plus a margin each side. The
+    millimetre footprint is converted to pixels with the on-screen scale of the
+    part: its body bounding box in px against its real dimensions, per axis (so a
+    stretched aspect or non-square pixels are handled directionally).
+    """
+    if not part_dims_mm or not char_count or char_count <= 0:
+        return None
+    pw_mm, ph_mm = part_dims_mm
+    if pw_mm <= 0 or ph_mm <= 0:
+        return None
+    ys, xs = np.where(body > 0)
+    if xs.size == 0:
+        return None
+    bbox_w = int(xs.max() - xs.min()) + 1
+    bbox_h = int(ys.max() - ys.min()) + 1
+    if bbox_w <= 0 or bbox_h <= 0:
+        return None
+
+    pc = cfg.placement
+    ppm_x = bbox_w / pw_mm      # on-screen px per mm, each axis
+    ppm_y = bbox_h / ph_mm
+    text_w_mm = char_count * pc.char_advance_ratio * pc.font_height_mm
+    text_h_mm = pc.font_height_mm
+    margin_mm = pc.text_margin_frac * pc.font_height_mm
+    hx = int(round(0.5 * (text_w_mm + 2 * margin_mm) * ppm_x))
+    hy = int(round(0.5 * (text_h_mm + 2 * margin_mm) * ppm_y))
+    return max(1, hx), max(1, hy)
+
+
 def find_safe_placement(
     screen_bgr: np.ndarray,
     cfg: Config = DEFAULT,
     canvas_rect: tuple[int, int, int, int] | None = None,
+    part_dims_mm: tuple[float, float] | None = None,
+    char_count: int | None = None,
 ) -> PlacementResult:
     """Find the safest part-number placement point in a full-screen screenshot.
 
     canvas_rect (x1, y1, x2, y2) overrides the configured canvas crop; pass one
     when the input is already a canvas crop by giving the full image bounds.
+
+    part_dims_mm (width, height) and char_count size a RECTANGULAR reserved
+    footprint matching the wide/short engraving; when either is absent the search
+    falls back to the isotropic-circle clearance.
     """
     h, w = screen_bgr.shape[:2]
     if canvas_rect is None:
@@ -349,7 +400,44 @@ def find_safe_placement(
         return PlacementResult(None, 0.0, False, "no part body detected", debug)
 
     # Distance transform: each body pixel -> distance to nearest non-body pixel.
+    # Used to choose the most generous spot in either mode.
     dist = cv2.distanceTransform(body, cv2.DIST_L2, 5)
+
+    rect = _text_rect_px(body, part_dims_mm, char_count, cfg)
+    if rect is not None:
+        hx, hy = rect
+        # A point is a valid centre iff the whole hx-by-hy rectangle is inside the
+        # body: erode the body by that rectangle and any surviving pixel qualifies.
+        se = cv2.getStructuringElement(cv2.MORPH_RECT, (2 * hx + 1, 2 * hy + 1))
+        valid = cv2.erode(body, se)
+        if cv2.countNonZero(valid) > 0:
+            # Among the spots where the text fits, take the one with the most
+            # isotropic breathing room (keeps it away from the nearest edge).
+            masked = dist.copy()
+            masked[valid == 0] = 0
+            _, _, _, max_loc = cv2.minMaxLoc(masked)
+            cx, cy = max_loc
+            clearance = float(dist[cy, cx])
+            ok = True
+            reason = (f"text {2 * hx}x{2 * hy}px fits; "
+                      f"clearance {clearance:.0f}px at the chosen point")
+        else:
+            # The footprint doesn't fit anywhere -- report the roomiest point and
+            # abort so the part is flagged rather than stamped too tight.
+            _, max_val, _, max_loc = cv2.minMaxLoc(dist)
+            cx, cy = max_loc
+            clearance = float(max_val)
+            ok = False
+            reason = (f"text {2 * hx}x{2 * hy}px does not fit anywhere "
+                      f"(roomiest point only {clearance:.0f}px half-clearance)")
+
+        colour = (0, 200, 0) if ok else (0, 0, 255)
+        cv2.rectangle(debug, (cx - hx, cy - hy), (cx + hx, cy + hy), colour, 2)
+        cv2.circle(debug, (cx, cy), 4, (0, 0, 255), -1)
+        point = (x1 + cx, y1 + cy)
+        return PlacementResult(point, clearance, ok, reason, debug, (hx, hy))
+
+    # Fallback: isotropic circle when we can't size the text footprint.
     _, max_val, _, max_loc = cv2.minMaxLoc(dist)
     clearance = float(max_val)
     cx, cy = max_loc  # canvas-local
@@ -358,7 +446,7 @@ def find_safe_placement(
     ok = clearance >= required
     reason = (
         f"clearance {clearance:.1f}px "
-        f"{'>=' if ok else '<'} required {required}px"
+        f"{'>=' if ok else '<'} required {required}px (no part dims -- circle)"
     )
 
     # Overlay: clearance circle + chosen point.

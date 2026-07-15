@@ -58,7 +58,8 @@ def process_full_part(part_name: str,
             return False
         try:
             ok = process_open_part(target_font, do_save=True, do_close=True,
-                                   log=lambda m: log("  " + m), boost=boost)
+                                   log=lambda m: log("  " + m), boost=boost,
+                                   part_name=part_name)
         except Exception as exc:  # noqa: BLE001 - report, let the caller recover
             log(f"stencil: cycle error: {exc!r}")
             return False

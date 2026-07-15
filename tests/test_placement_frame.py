@@ -303,6 +303,62 @@ def test_verify_assumes_clear_for_edge_sliver():
     assert v.ok, f"edge sliver wrongly FAILed: {v.reason}"
 
 
+def test_text_rectangle_is_wide_and_fits_on_material():
+    # A wide part (real 1000mm x 300mm) that fills a ~1450px-wide body: a 13-char
+    # number reserves a WIDE, SHORT rectangle and must fit on the material.
+    part = (120, 200, 1490, 640)
+    img = _canvas(part)
+    res = find_safe_placement(img, DEFAULT, (0, 0, W, H),
+                              part_dims_mm=(1000.0, 300.0), char_count=13)
+    assert res.half_extent is not None, "expected a rectangular footprint"
+    hx, hy = res.half_extent
+    assert hx > hy * 2, f"footprint should be much wider than tall, got {hx}x{hy}"
+    assert res.ok and _inside(res.point, part), \
+        f"wide text should fit on this part: {res.reason}"
+
+
+def test_text_rectangle_scales_with_zoom():
+    # Same part number, but the part is reported HALF the real size -> at Zoom
+    # Extents each mm is twice the pixels -> the reserved rectangle doubles.
+    part = (120, 200, 1490, 640)
+    img = _canvas(part)
+    big = find_safe_placement(img, DEFAULT, (0, 0, W, H),
+                              part_dims_mm=(500.0, 150.0), char_count=13)
+    small = find_safe_placement(img, DEFAULT, (0, 0, W, H),
+                                part_dims_mm=(1000.0, 300.0), char_count=13)
+    assert big.half_extent[0] > 1.8 * small.half_extent[0], \
+        f"halving real size should ~double the px footprint: {big.half_extent} vs {small.half_extent}"
+
+
+def test_text_rectangle_aborts_when_it_cannot_fit():
+    # A long number on a small part: the wide rectangle can't fit -> abort (ok
+    # False) so the runner flags it instead of stamping over an edge.
+    part = (700, 380, 950, 520)      # small part
+    img = _canvas(part)
+    res = find_safe_placement(img, DEFAULT, (0, 0, W, H),
+                              part_dims_mm=(60.0, 34.0), char_count=24)
+    assert res.half_extent is not None
+    assert not res.ok, f"a too-wide number should not fit: {res.reason}"
+
+
+def test_no_dims_falls_back_to_circle():
+    part = (120, 200, 1490, 640)
+    img = _canvas(part)
+    res = find_safe_placement(img, DEFAULT, (0, 0, W, H))     # no dims/char_count
+    assert res.half_extent is None, "without dims it must use the circle path"
+    assert _inside(res.point, part)
+
+
+def test_parse_dims_mm():
+    from autoboost.part_cycle import _parse_dims_mm
+    w, h = _parse_dims_mm("40.3 in x 12.6 in")
+    assert abs(w - 40.3 * 25.4) < 0.1 and abs(h - 12.6 * 25.4) < 0.1
+    w2, h2 = _parse_dims_mm("18 mm x 9 mm")
+    assert abs(w2 - 18) < 0.1 and abs(h2 - 9) < 0.1
+    assert _parse_dims_mm("") is None
+    assert _parse_dims_mm("garbage") is None
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
