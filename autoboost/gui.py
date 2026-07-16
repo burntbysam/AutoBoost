@@ -98,8 +98,9 @@ class App:
         self.q: queue.Queue = queue.Queue()
         self.worker: threading.Thread | None = None
         self._cancelled = False
-        self._t0 = time.monotonic()   # program start; every log line is stamped
-                                      # with the elapsed time since this moment
+        self._t0 = time.monotonic()   # elapsed-stamp origin; re-zeroed when a job
+                                      # Starts (see _start) so stamps read as job
+                                      # time. Until then, time-since-launch.
         self._build()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._append(f"{__release__} -- control panel")
@@ -289,6 +290,13 @@ class App:
 
         self._cancelled = False
         self._set_running(True)
+        # Zero the elapsed-time clock here so every stamp measures JOB time, not
+        # time-since-launch: the operator's reading-the-panel pause and the
+        # version check (~20s in earlier logs) no longer inflate the numbers.
+        # Placed after the input validation above so a rejected Start (bad
+        # numbers) doesn't reset it. The banner below is the first job line and
+        # now reads [00:00.0]; pre-Start lines keep their launch-relative stamps.
+        self._t0 = time.monotonic()
         label = {"full": "stencil + cut", "stencil": "stencil only",
                  "cut": "cut only"}[mode]
         scope = f"{len(part_names)} listed part(s)" if part_names else "every part in the Home list"
