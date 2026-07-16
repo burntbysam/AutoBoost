@@ -83,6 +83,9 @@ class BoostUIA:
                                 # reset() -- the panel sits at the same spot in
                                 # every maximized Design window, so later parts
                                 # hit-test it instead of re-walking the tree
+        self._table_rect = None  # screen rect of the property-grid Table; same
+                                 # idea (see _grid_table): resolving it via
+                                 # child_window is the ~7.5s pig of the profile
         self.last_value = ""   # last value observed by a set operation (for tests)
         # pyautogui inserts a 0.1s pause after EVERY call by default. The cycles
         # already sleep explicitly after each action, so that hidden pause is
@@ -851,12 +854,66 @@ class BoostUIA:
     _EDITOR_AUTOID = "9765996"     # the WinForms EDIT holding the value
     _OPEN_AUTOID = "4261530"       # its dropdown 'Open' arrow
 
+    def _table_by_hittest(self, rect):
+        """Resolve the property-grid Table from a cached screen rect without a
+        descendant search: ElementFromPoint at the rect centre (one UIA call),
+        then walk up to the enclosing Table. Returns the wrapper only if it
+        looks like the grid (has Button/Edit children); otherwise None so the
+        caller falls back to the reliable child_window search."""
+        try:
+            cx = (rect[0] + rect[2]) // 2
+            cy = (rect[1] + rect[3]) // 2
+            elem = self.desktop.from_point(cx, cy)
+        except Exception:
+            return None
+        for _ in range(6):                       # row/cell -> ... -> Table
+            if elem is None:
+                return None
+            try:
+                if elem.element_info.control_type == "Table":
+                    kids = elem.children()
+                    types = set()
+                    for k in kids:
+                        try:
+                            types.add(k.element_info.control_type)
+                        except Exception:
+                            pass
+                    if "Button" in types or "Edit" in types:
+                        return elem
+                    return None
+            except Exception:
+                pass
+            try:
+                elem = elem.parent()
+            except Exception:
+                return None
+        return None
+
     def _grid_table(self):
         """Cached wrapper for the property grid's Table (rows/editor/arrow are
-        its DIRECT children, so a shallow children() scan is fast)."""
-        if self._table is None:
-            self._table = self._property_grid().child_window(
-                control_type="Table").wrapper_object()
+        its DIRECT children, so a shallow children() scan is fast).
+
+        Resolving it via child_window(auto_id='propertyGrid1') is a descendant
+        walk of the whole Design window -- ~7.5s across the WinForms-UIA bridge,
+        the single biggest UIA cost of the 0.7.15 profile. The grid is at a fixed
+        screen position in a maximized Design window, so after one real find its
+        Table rect is cached and later parts resolve it with an O(1) hit-test
+        (see _table_by_hittest); any doubt falls back to the child_window walk."""
+        if self._table is not None:
+            return self._table
+        if self._table_rect is not None:
+            tbl = self._table_by_hittest(self._table_rect)
+            if tbl is not None:
+                self._table = tbl
+                return self._table
+            self._table_rect = None          # layout moved -- re-find from scratch
+        self._table = self._property_grid().child_window(
+            control_type="Table").wrapper_object()
+        try:
+            r = self._table.rectangle()
+            self._table_rect = (r.left, r.top, r.right, r.bottom)
+        except Exception:
+            pass
         return self._table
 
     def _options_panel(self):

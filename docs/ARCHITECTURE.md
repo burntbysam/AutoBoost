@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.15)
+# AutoBoost Architecture (Beta 0.7.16)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -152,6 +152,14 @@ warm part at ~60s. The next-biggest UIA cost, ~7.8s from selecting the text to
 settle is spent before that line), so 0.7.15 splits that log into its three
 sub-calls -- grid pane resolve / Table resolve / children scan -- to show which
 one to attack before touching it (measure first, as the dims fix was measured).
+That split named the pig unambiguously: `pane 7.5s, table 7.6s, scan 0.2s` --
+the whole cost is resolving `child_window(auto_id='propertyGrid1')`, a descendant
+walk of the Design window (the "table 7.6s" was the instrumentation re-walking
+to the pane; the Table's own increment and the row scan are ~0.2s each). 0.7.16
+applies the dims cure to it: the Table's screen rect is cached across parts and
+resolved with ElementFromPoint + a short parent-walk to the enclosing Table
+(`_table_by_hittest`), validated by its child control types, with the
+child_window walk as fallback. Expected ~7.5s -> ~0.5s from part 2 on.
 
 Every vision module is runnable **standalone against a saved PNG** and emits a
 debug overlay, so the algorithms can be iterated from screenshots without driving
@@ -195,7 +203,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.15)
+  __init__.py            app name + version (AutoBoost Beta 0.7.16)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/

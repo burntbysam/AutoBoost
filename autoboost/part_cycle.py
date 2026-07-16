@@ -177,29 +177,13 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
     log(f"selected placed text (click at {sx},{sy})")
 
     # 5. Font: add the Font type property if absent, then set EasyType-L=10mm.
-    # The whole 7.8s "select -> grid ready" block of the 0.7.14 profile is this
-    # one resolution (the settle sleep is already spent before the line above).
-    # Split it into its three sub-calls so the next log says which is the pig:
-    #   pane   = child_window(auto_id='propertyGrid1') wrapper resolve
-    #   table  = child_window(control_type='Table') wrapper resolve (grid's child)
-    #   scan   = shallow children() pass that reads the row buttons
-    # Each caches into the driver, so this costs no more than the old single call.
-    _m = time.monotonic
-    _t0 = _m()
-    try:
-        boost._property_grid().wrapper_object()
-    except Exception:
-        pass
-    _t1 = _m()
-    try:
-        boost._grid_table()
-    except Exception:
-        pass
-    _t2 = _m()
+    # The 0.7.15 split proved this block is entirely the grid Table resolution
+    # (child_window(auto_id='propertyGrid1') descendant walk, ~7.5s). 0.7.15+
+    # caches the Table rect and hit-tests it on later parts, so this should drop
+    # to ~0.5s from part 2 on -- timed here so the next log shows the win.
+    _t0 = time.monotonic()
     grid_buttons = boost._grid_controls()["buttons"]
-    _t3 = _m()
-    log(f"property grid ready (pane {_t1 - _t0:.1f}s, table {_t2 - _t1:.1f}s, "
-        f"scan {_t3 - _t2:.1f}s)")
+    log(f"property grid ready (+{time.monotonic() - _t0:.1f}s)")
     if "Font type" not in grid_buttons:
         added = boost.add_font_type()
         log(f"add Font type -> {added} ({boost.last_value})")

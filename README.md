@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.15** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.16** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
