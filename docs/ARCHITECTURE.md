@@ -1,4 +1,4 @@
-# AutoBoost Architecture (Beta 0.7.14)
+# AutoBoost Architecture (Beta 0.7.15)
 
 AutoBoost automates the per-part chore in TRUMPF TruTops Boost: open a part,
 place its part-number as engraving text (EasyType-L=10mm), verify the placement
@@ -146,6 +146,13 @@ cycles sleep explicitly anyway); the Design-open wait polls at 0.2s instead of
 ~2s granularity. The per-part log also gained 'dimensions:' and 'property grid
 ready' lines so the stamps attribute the remaining cost precisely.
 
+The 0.7.14 log confirmed the dims cache (13.7s cold -> 1.0s warm) and put the
+warm part at ~60s. The next-biggest UIA cost, ~7.8s from selecting the text to
+'property grid ready', is entirely the `_grid_controls()` resolution (the panel
+settle is spent before that line), so 0.7.15 splits that log into its three
+sub-calls -- grid pane resolve / Table resolve / children scan -- to show which
+one to attack before touching it (measure first, as the dims fix was measured).
+
 Every vision module is runnable **standalone against a saved PNG** and emits a
 debug overlay, so the algorithms can be iterated from screenshots without driving
 live Boost -- the primary development feedback loop.
@@ -188,7 +195,7 @@ retried or skipped -- this is what converts "hope" into measured >=95%.
 
 ```
 autoboost/
-  __init__.py            app name + version (AutoBoost Beta 0.7.14)
+  __init__.py            app name + version (AutoBoost Beta 0.7.15)
   config.py              all tunables (dataclasses, JSON-loadable)
   logging_setup.py       versioned per-run logs + debug screenshots
   vision/
