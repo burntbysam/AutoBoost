@@ -59,6 +59,18 @@ WHAT THE RESULT MEANS
     stay on AutoBoost and pursue stencil-only for the jobs that allow it.
 
 Read-only. Non-destructive. Independent of the AutoBoost package.
+
+FIRST-RUN FINDINGS (2026-07-20, informing this v2)
+--------------------------------------------------
+The workstation runs TruTops Fab / Oseon, not standalone Boost: the shell is
+Trumpf.TruTops.Control.Shell.exe over a FabClient/FabServer/FabServices tree.
+A `Trumpf.Fab.PublicAPI.exe` service exists (the supported automation surface),
+plus a rich XCadViewer COM control (LoadFile / CreateTextElement / CreateLabelPart
+/ GetDimensions -- labeling + geometry). v1's COM ProgID sweep [2] CRASHED on a
+bytes registry value, so it found nothing; v2 fixes that (`_s`), prunes the
+bundled infrastructure (Erlang/ElasticSearch/nginx/JDK) that buried the signal,
+and adds [4b] to name the API service binaries and any endpoint their config
+declares. Re-run it to complete the picture.
 """
 
 from __future__ import annotations
@@ -167,12 +179,27 @@ def _iter_subkeys(root, path):
         winreg.CloseKey(k)
 
 
+def _s(v):
+    """Coerce a registry value to str-or-None. Default values can come back as
+    bytes (REG_BINARY) or int (REG_DWORD); v1 crashed joining those into the
+    match blob ('expected str instance, bytes found'), silently killing the
+    whole CLSID sweep. Normalise here, once, at the source."""
+    if v is None:
+        return None
+    if isinstance(v, bytes):
+        try:
+            return v.decode("utf-8", "replace")
+        except Exception:
+            return v.decode("latin-1", "replace")
+    return v if isinstance(v, str) else str(v)
+
+
 def _read_default(root, path):
     import winreg
     try:
         with winreg.OpenKey(root, path) as k:
             val, _ = winreg.QueryValueEx(k, "")
-            return val
+            return _s(val)
     except OSError:
         return None
 
@@ -249,6 +276,27 @@ def scan_typelibs(match):
 API_HINTS = ("api", "automation", "interop", "sdk", "script", "addin",
              "plugin", "macro", "remote", "com", "oleaut")
 
+# TruTops Fab / Oseon ships a whole server stack (Erlang, ElasticSearch, Jaeger,
+# nginx, a bundled JDK, ...). None of it is a Boost automation surface, and it
+# buried the real signal under 847 "managed" hits + a truncated walk in v1.
+# Prune these directory NAMES so the walk stays on TRUMPF's own code.
+INFRA_SKIP_NAMES = {
+    "erlang", "elasticsearch", "jaeger", "nginx", "jdk", "jre", "node",
+    "node_modules", "redis", "kibana", "logstash", "telemetry", "infrastructure",
+    "postgres", "postgresql", "mongodb", "grafana", "prometheus",
+}
+# The vendor's own binaries (what we actually care about).
+VENDOR_TOKENS = ("trumpf", "trutops", "oseon")
+# Binaries whose name alone signals an automation/API surface worth a hard look.
+NOTABLE_TOKENS = ("publicapi", "programmingservice", "fabricationservice",
+                  "storageservice", "businessobjects", "automation", "scripting",
+                  "sdk")
+
+
+def _vendor(name: str) -> bool:
+    low = (name or "").lower()
+    return any(t in low for t in VENDOR_TOKENS)
+
 
 def guess_install_dirs(match):
     """Common install roots plus any Program Files subdir whose name matches."""
@@ -270,34 +318,73 @@ def guess_install_dirs(match):
     return dirs
 
 
-def scan_install_files(dirs, match, max_files=40000):
-    """Walk the install dirs. Return (tlbs, managed_hits, doc_hits). Bounded."""
+def scan_install_files(dirs, match, max_files=200000):
+    """Walk the install dirs, pruning the bundled-infrastructure subtrees. Return
+    (tlbs, module_hits, doc_hits, truncated). Only VENDOR-named .dll/.exe count as
+    module hits, so the list is Trumpf's own binaries, not System/Erlang/DevExpress
+    noise. Each is tagged 'managed' (.NET) or 'native'."""
     import os
-    tlbs, managed, docs = [], [], []
+    tlbs, modules, docs = [], [], []
     seen = 0
     for d in sorted(dirs):
         if not d or not os.path.isdir(d):
             continue
-        for root, _sub, files in os.walk(d):
+        for root, subdirs, files in os.walk(d):
+            subdirs[:] = [s for s in subdirs if s.lower() not in INFRA_SKIP_NAMES]
             for fn in files:
                 seen += 1
                 if seen > max_files:
-                    return tlbs, managed, docs, True
+                    return tlbs, modules, docs, True
                 low = fn.lower()
                 full = os.path.join(root, fn)
                 if low.endswith((".tlb", ".olb")):
                     tlbs.append(full)
-                elif low.endswith((".dll", ".exe")):
-                    hinted = any(h in low for h in API_HINTS)
-                    if hinted or match(low):
-                        if is_clr_assembly(full):
-                            managed.append((full, "managed"))
-                        else:
-                            managed.append((full, "native"))
-                elif low.endswith((".chm", ".pdf")) and (
-                        any(h in low for h in API_HINTS) or match(low)):
+                elif low.endswith((".dll", ".exe")) and _vendor(fn):
+                    modules.append((full, "managed" if is_clr_assembly(full) else "native"))
+                elif low.endswith((".chm", ".pdf", ".md", ".html")) and _vendor(root) \
+                        and (any(h in low for h in ("api", "automat", "script", "sdk"))):
                     docs.append(full)
-    return tlbs, managed, docs, False
+    return tlbs, modules, docs, False
+
+
+def hunt_public_api(dirs):
+    """Look specifically for the automation/API surface: TRUMPF service binaries
+    whose name signals an API, and any endpoint (URL/port) their appsettings/
+    .config files declare. Read-only; caps file reads."""
+    import os
+    import re
+    URL = re.compile(r'https?://[^\s"\'<>]+', re.I)
+    ADDR = re.compile(
+        r'"(?:Port|Url|Uri|Endpoint|BaseAddress|Address|Host|BaseUrl)"\s*:\s*"?([^",}\s]+)',
+        re.I)
+    services, endpoints = [], []
+    for d in sorted(dirs):
+        if not d or not os.path.isdir(d):
+            continue
+        for root, subdirs, files in os.walk(d):
+            subdirs[:] = [s for s in subdirs if s.lower() not in INFRA_SKIP_NAMES]
+            low_root = root.lower()
+            near_api = any(t in low_root for t in
+                           ("publicapi", "fabservices", "programming", "automation"))
+            for fn in files:
+                low = fn.lower()
+                full = os.path.join(root, fn)
+                if low.endswith((".exe", ".dll")) and _vendor(fn) \
+                        and any(t in low for t in NOTABLE_TOKENS):
+                    services.append(full)
+                elif near_api and (low.startswith("appsettings") and low.endswith(".json")
+                                   or low.endswith(".exe.config") or low == "web.config"):
+                    try:
+                        with open(full, "r", encoding="utf-8", errors="replace") as f:
+                            txt = f.read(300000)
+                    except Exception:
+                        continue
+                    for u in sorted(set(URL.findall(txt)))[:20]:
+                        endpoints.append((full, u))
+                    for a in sorted(set(ADDR.findall(txt)))[:20]:
+                        if a.lower().startswith("http") or a.isdigit() or ":" in a:
+                            endpoints.append((full, f"addr: {a}"))
+    return services, endpoints
 
 
 # --------------------------------------------------------------------------- #
@@ -391,7 +478,8 @@ def boost_process_path():
     pid = None
     try:
         d = Desktop(backend="uia")
-        for title_re in (r".* - TruTops Boost - .*", r"TruTops Boost.*"):
+        for title_re in (r".* - TruTops Boost - .*", r"TruTops Boost.*",
+                         r".*TruTops.*", r".*Oseon.*"):
             try:
                 w = d.window(title_re=title_re, control_type="Window")
                 if w.exists(timeout=1):
@@ -520,9 +608,9 @@ def run_probe(keywords, fast, out_path, instantiate):
     except Exception as exc:
         add(f"    sweep error: {exc!r}")
 
-    # 4. Install-dir file scan
+    # 4. Install-dir file scan (TRUMPF binaries only; infra pruned)
     add("")
-    add("[4] Install-directory scan")
+    add("[4] Install-directory scan (vendor binaries; bundled infra pruned)")
     install_dirs |= guess_install_dirs(match)
     if install_dirs:
         add("    dirs: " + "; ".join(sorted(install_dirs)))
@@ -532,19 +620,20 @@ def run_probe(keywords, fast, out_path, instantiate):
                 if p not in tlb_paths:
                     tlb_paths.append(p)
             add(f"    type libraries (.tlb/.olb): {len(tlbs)}")
-            for p in tlbs[:40]:
+            for p in tlbs[:60]:
                 add(f"        {p}")
             managed = [p for p, k in mods if k == "managed"]
             native = [p for p, k in mods if k == "native"]
-            add(f"    API-named MANAGED (.NET) modules: {len(managed)}")
-            for p in managed[:40]:
+            add(f"    TRUMPF managed (.NET) modules: {len(managed)}  "
+                f"(shown: up to 60)")
+            for p in managed[:60]:
                 add(f"        {p}")
-            add(f"    API-named native modules: {len(native)}")
-            for p in native[:20]:
+            add(f"    TRUMPF native modules: {len(native)}")
+            for p in native[:30]:
                 add(f"        {p}")
             if docs:
-                add(f"    API-named docs: {len(docs)}")
-                for p in docs[:20]:
+                add(f"    API/SDK docs: {len(docs)}")
+                for p in docs[:30]:
                     add(f"        {p}")
             if truncated:
                 add("    (file scan hit its cap -- some dirs not fully walked)")
@@ -553,11 +642,42 @@ def run_probe(keywords, fast, out_path, instantiate):
     else:
         add("    no matching install directory located.")
 
-    # 5. Type-library method dump (the payload)
+    # 4b. Targeted API-surface hunt (the point of this whole probe)
+    add("")
+    add("[4b] Automation/API service binaries + declared endpoints")
+    try:
+        services, endpoints = hunt_public_api(install_dirs)
+        if services:
+            add(f"    candidate API/service binaries: {len(services)}")
+            for p in sorted(set(services)):
+                add(f"        {p}")
+        else:
+            add("    no API-named service binaries found.")
+        if endpoints:
+            add(f"    endpoints declared in config: {len(endpoints)}")
+            for f, e in endpoints[:40]:
+                add(f"        {e}")
+                add(f"            (in {f})")
+        else:
+            add("    no endpoints found in appsettings/.config near the services.")
+    except Exception as exc:
+        add(f"    hunt error: {exc!r}")
+
+    # 5. Type-library method dump (the payload) -- dedup identical libraries
     add("")
     add("[5] Type-library contents (scriptable methods)")
-    if tlb_paths:
-        for p in tlb_paths:
+    seen_tlb, uniq_tlb = set(), []
+    for p in tlb_paths:
+        try:
+            key = os.path.normcase(os.path.realpath(p))
+        except Exception:
+            key = p
+        if key in seen_tlb:
+            continue
+        seen_tlb.add(key)
+        uniq_tlb.append(p)
+    if uniq_tlb:
+        for p in uniq_tlb:
             add(f"    == {p} ==")
             for line in dump_typelib(p):
                 add(line)
@@ -587,12 +707,16 @@ def run_probe(keywords, fast, out_path, instantiate):
     add("")
     add("-" * 72)
     add("READ THIS")
-    add("  * ProgID + a type library listing methods (Open/Save/Program/...) ->")
-    add("    a real scripting API exists; a direct-call spike is worth doing.")
-    add("  * ProgID but no readable type library -> likely late-bound API; dig")
-    add("    deeper (try --instantiate <ProgID> and inspect its members).")
-    add("  * Only API-named .NET assemblies -> a managed API; call via pythonnet.")
+    add("  * A PublicAPI/service binary in [4b] + a declared endpoint -> this is")
+    add("    the modern TruTops Fab/Oseon REST surface; the supported path. Ask")
+    add("    TRUMPF for the API docs for that endpoint/version.")
+    add("  * A COM ProgID in [2] + a type library of methods in [5] -> an in-")
+    add("    process automation object; a --instantiate spike is worth doing.")
+    add("  * Only TRUMPF managed (.NET) assemblies -> an in-proc managed API;")
+    add("    callable via pythonnet, but unsupported/reverse-engineered.")
     add("  * Nothing anywhere -> GUI automation is the ceiling; stay on AutoBoost.")
+    add("  NOTE: debwin3 'IAutomation' (Write/Clear/WriteLine) is a DEBUG WINDOW,")
+    add("        not a production API -- ignore it.")
     add("-" * 72)
 
     _emit(R, out_path)
@@ -621,6 +745,12 @@ def _selftest() -> int:
     assert exe_from_server("") == ""
     assert is_clr_assembly(__file__) is False           # this .py is not a PE
     assert is_clr_assembly("/no/such/file") is False
+    # The v1 crash: a bytes registry value must coerce, not blow up a join.
+    assert _s(b"C:\\x\\Boost.exe") == "C:\\x\\Boost.exe"
+    assert _s(1033) == "1033"
+    assert _s(None) is None
+    assert " ".join(x for x in (_s(b"a"), _s(None), _s("b")) if x) == "a b"
+    assert _vendor("Trumpf.Fab.PublicAPI.exe") and not _vendor("api-ms-win-core.dll")
     print("selftest OK")
     return 0
 
