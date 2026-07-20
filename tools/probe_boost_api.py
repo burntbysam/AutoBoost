@@ -60,17 +60,23 @@ WHAT THE RESULT MEANS
 
 Read-only. Non-destructive. Independent of the AutoBoost package.
 
-FIRST-RUN FINDINGS (2026-07-20, informing this v2)
---------------------------------------------------
-The workstation runs TruTops Fab / Oseon, not standalone Boost: the shell is
-Trumpf.TruTops.Control.Shell.exe over a FabClient/FabServer/FabServices tree.
-A `Trumpf.Fab.PublicAPI.exe` service exists (the supported automation surface),
-plus a rich XCadViewer COM control (LoadFile / CreateTextElement / CreateLabelPart
-/ GetDimensions -- labeling + geometry). v1's COM ProgID sweep [2] CRASHED on a
-bytes registry value, so it found nothing; v2 fixes that (`_s`), prunes the
-bundled infrastructure (Erlang/ElasticSearch/nginx/JDK) that buried the signal,
-and adds [4b] to name the API service binaries and any endpoint their config
-declares. Re-run it to complete the picture.
+FINDINGS SO FAR (TruTops Fab / Oseon)
+-------------------------------------
+The workstation runs TruTops Fab / Oseon, not standalone Boost (shell is
+Trumpf.TruTops.Control.Shell.exe over a FabClient/FabServer/FabServices tree).
+Two positive automation surfaces were confirmed:
+  * REST/OData: a Trumpf.Fab.PublicAPI service listening on http://*:11181, a
+    StorageService OData endpoint on 11170/odata, a client SDK
+    Trumpf.OseonPublicApi.dll, all gated by an OIDC IdentityProvider (/idp).
+    This is the modern, supported path.
+  * In-process COM: XCadViewer controls with real ProgIDs
+    (XCadViewerControl.TcXCadViewer.1, ...TcPart.1, ...TcLabelPartFamily.1) and a
+    69-method TiXCadViewer type library (LoadFile / CreateLabelPart /
+    CreateTextElement / GetDimensions). Rich, but a VIEWER control -- whether it
+    persists to production geometry is unproven.
+Also seen: Cut\bin\cut.olb (classic Cut automation TLB; first load errored --
+v2 retries it). --endpoints (opt-in, read-only) GETs each service's Swagger/
+OpenAPI/OData doc to list the actual operations -- the decisive next step.
 """
 
 from __future__ import annotations
@@ -406,7 +412,20 @@ def dump_typelib(path, max_methods=80):
     try:
         tlib = LoadTypeLib(path)
     except Exception as exc:
-        return [f"    (could not load type library: {exc!r})"]
+        # A bare LoadTypeLib fails on some libraries that need to resolve from
+        # their own directory (e.g. Cut's cut.olb: 'Error loading type
+        # library/DLL'). Retry without registering, from inside the dir.
+        try:
+            import os
+            from comtypes.typeinfo import LoadTypeLibEx, REGKIND_NONE
+            cwd = os.getcwd()
+            try:
+                os.chdir(os.path.dirname(path) or ".")
+                tlib = LoadTypeLibEx(path, REGKIND_NONE)
+            finally:
+                os.chdir(cwd)
+        except Exception as exc2:
+            return [f"    (could not load type library: {exc!r}; retry: {exc2!r})"]
     try:
         count = tlib.GetTypeInfoCount()
     except Exception as exc:
@@ -512,6 +531,94 @@ def boost_process_path():
         return None, f"process path lookup failed: {exc!r}"
 
 
+def ports_from_endpoints(endpoints):
+    """Pull listen ports out of the [4b] endpoint strings, e.g.
+    'http://*:11181' / 'addr: 11165' -> {11181, 11165}."""
+    import re
+    ports = set()
+    for item in endpoints:
+        text = item[1] if isinstance(item, (tuple, list)) else str(item)
+        for m in re.findall(r":(\d{4,5})\b", text):
+            ports.add(int(m))
+        for m in re.findall(r"addr:\s*(\d{4,5})\b", text):
+            ports.add(int(m))
+    return ports
+
+
+def probe_endpoints(ports):
+    """OPT-IN, read-only: GET the well-known API-doc paths on each localhost
+    service port and, for any OpenAPI/Swagger doc, list its operations -- the
+    actual REST surface. GET only; no POST/PUT/DELETE, nothing mutated. A
+    refused connection just means that service isn't listening."""
+    import json
+    import re
+    import urllib.request
+    PATHS = ["/swagger/v1/swagger.json", "/swagger/v2/swagger.json",
+             "/openapi/v1.json", "/swagger", "/swagger/index.html",
+             "/odata/$metadata", "/odata", "/$metadata", "/health", "/"]
+    out = []
+    for port in sorted(ports):
+        base = f"http://localhost:{port}"
+        out.append(f"    == localhost:{port} ==")
+        listening = True
+        for p in PATHS:
+            if not listening:
+                break
+            url = base + p
+            try:
+                req = urllib.request.Request(
+                    url, headers={"Accept": "application/json, text/html, */*"})
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    code = resp.getcode()
+                    ctype = resp.headers.get("Content-Type", "")
+                    body = resp.read(3_000_000)
+            except Exception as exc:
+                msg = repr(exc)
+                low = msg.lower()
+                if "refused" in low or "10061" in low or "timed out" in low \
+                        or "timeout" in low:
+                    out.append(f"        (no service listening on {port})")
+                    listening = False
+                    continue
+                # 401/403 still tells us the endpoint EXISTS (auth-gated).
+                if "http error 401" in low or "http error 403" in low:
+                    out.append(f"        {p}  -> auth required (endpoint exists)")
+                continue
+            out.append(f"        {p}  -> HTTP {code}  {ctype}  ({len(body)}B)")
+            text = body.decode("utf-8", "replace")
+            if "json" in ctype.lower() or p.endswith(".json"):
+                try:
+                    doc = json.loads(text)
+                except Exception:
+                    doc = None
+                if isinstance(doc, dict) and isinstance(doc.get("paths"), dict):
+                    info = doc.get("info") or {}
+                    out.append(f"          OpenAPI: {info.get('title', '')} "
+                               f"{info.get('version', '')}".rstrip())
+                    ops = []
+                    for path, methods in doc["paths"].items():
+                        if not isinstance(methods, dict):
+                            continue
+                        for verb, meta in methods.items():
+                            if verb.lower() not in (
+                                    "get", "post", "put", "delete", "patch"):
+                                continue
+                            summ = ""
+                            if isinstance(meta, dict):
+                                summ = meta.get("summary") or meta.get("operationId") or ""
+                            ops.append(f"          {verb.upper():6s} {path}  {summ}".rstrip())
+                    for line in ops[:250]:
+                        out.append(line)
+                    if len(ops) > 250:
+                        out.append(f"          (+{len(ops) - 250} more operations)")
+            elif "$metadata" in p or "xml" in ctype.lower():
+                sets = re.findall(r'EntitySet Name="([^"]+)"', text)
+                if sets:
+                    shown = sorted(set(sets))[:80]
+                    out.append("          OData EntitySets: " + ", ".join(shown))
+    return out
+
+
 def try_instantiate(progid):
     """OPT-IN: CreateObject(progid) and list its dispatch methods, then release.
     May start or attach Boost. Returns report lines."""
@@ -541,7 +648,7 @@ def try_instantiate(progid):
 # Orchestration                                                               #
 # --------------------------------------------------------------------------- #
 
-def run_probe(keywords, fast, out_path, instantiate):
+def run_probe(keywords, fast, out_path, instantiate, do_endpoints=False):
     import os
     match = make_matcher(keywords)
     R = []
@@ -645,6 +752,7 @@ def run_probe(keywords, fast, out_path, instantiate):
     # 4b. Targeted API-surface hunt (the point of this whole probe)
     add("")
     add("[4b] Automation/API service binaries + declared endpoints")
+    endpoints = []
     try:
         services, endpoints = hunt_public_api(install_dirs)
         if services:
@@ -662,6 +770,25 @@ def run_probe(keywords, fast, out_path, instantiate):
             add("    no endpoints found in appsettings/.config near the services.")
     except Exception as exc:
         add(f"    hunt error: {exc!r}")
+
+    # 4c. Live API discovery (OPT-IN, read-only GETs) -- fetch each service's
+    #     Swagger/OpenAPI/OData doc to list the ACTUAL operations. This is the
+    #     one step that touches the running services (localhost, GET only), so
+    #     it is gated behind --endpoints.
+    add("")
+    add("[4c] Live API endpoints (read-only GETs to localhost)")
+    ports = ports_from_endpoints(endpoints) | {11181, 11170, 11172, 11171}
+    if not do_endpoints:
+        add(f"    skipped -- re-run with --endpoints to GET the swagger/OpenAPI/")
+        add(f"    OData docs from these ports: {sorted(ports)}")
+        add("    (read-only: it only issues HTTP GETs to localhost service ports)")
+    else:
+        try:
+            lines = probe_endpoints(ports)
+            for line in lines:
+                add(line)
+        except Exception as exc:
+            add(f"    endpoint probe error: {exc!r}")
 
     # 5. Type-library method dump (the payload) -- dedup identical libraries
     add("")
@@ -751,6 +878,9 @@ def _selftest() -> int:
     assert _s(None) is None
     assert " ".join(x for x in (_s(b"a"), _s(None), _s("b")) if x) == "a b"
     assert _vendor("Trumpf.Fab.PublicAPI.exe") and not _vendor("api-ms-win-core.dll")
+    assert ports_from_endpoints(
+        [("f", "http://*:11181"), ("f", "http://localhost:11170/odata"),
+         ("f", "addr: 11165")]) == {11181, 11170, 11165}
     print("selftest OK")
     return 0
 
@@ -766,6 +896,10 @@ def main(argv) -> int:
     ap.add_argument("--instantiate", default=None, metavar="PROGID",
                     help="OPT-IN: CreateObject(PROGID) and list its members. "
                          "May start/attach Boost. Use only after the passive probe.")
+    ap.add_argument("--endpoints", action="store_true",
+                    help="OPT-IN, read-only: GET each local service's swagger/"
+                         "OpenAPI/OData doc and list its operations. Localhost "
+                         "GETs only -- nothing is mutated.")
     ap.add_argument("--selftest", action="store_true",
                     help="Run the pure-helper self-test and exit (no Windows needed).")
     args = ap.parse_args(argv)
@@ -774,7 +908,8 @@ def main(argv) -> int:
         return _selftest()
 
     out = args.out or time.strftime("boost_api_probe_%Y%m%d_%H%M%S.txt")
-    run_probe(args.keywords, args.fast, out, args.instantiate)
+    run_probe(args.keywords, args.fast, out, args.instantiate,
+              do_endpoints=args.endpoints)
     return 0
 
 
