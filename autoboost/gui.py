@@ -1,7 +1,7 @@
 """AutoBoost control panel: run the jobs from a window instead of the console.
 
-Start/Cancel buttons, a live log pane, and a Save Log button -- everything the
-console runners print lands in the window instead. Under the hood it drives the
+Start/Cancel/Stop buttons, a live log pane, and a Save Log button -- everything
+the console runners print lands in the window instead. Under the hood it drives the
 exact same job loop as the CLI runners (`full_runner.run_full_job`), so the
 duplicate guard, consecutive-failure auto-stop, and end-of-run summary are
 identical:
@@ -19,6 +19,12 @@ Cancel is graceful, like the 'q' kill switch: the run halts before the NEXT
 part, so the current part always finishes (or recovers to Home) and nothing is
 left half-done. Ctrl+C in a console / holding 'q' still work as backstops.
 
+Stop is the hard version: it aborts the run right where it is -- no waiting for
+the part boundary -- by injecting an exception into the worker thread. Use it
+when a part is misbehaving and you need it to quit NOW; the trade is that Boost
+can be left mid-part (open Design view, half-placed marking) and you clean up by
+hand. When in doubt, prefer Cancel.
+
 On every launch the panel checks for a newer version (git fetch of this
 branch) and offers to install it. If the check can't run -- no network, git
 trouble, anything -- it just says "Version check failed" and the tool works
@@ -33,6 +39,7 @@ Built on tkinter (ships with Python) -- nothing new to install.
 
 from __future__ import annotations
 
+import ctypes
 import queue
 import re
 import sys
@@ -64,6 +71,27 @@ def format_elapsed(seconds: float) -> str:
     if h:
         return f"[{h}:{m:02d}:{s:04.1f}]"
     return f"[{int(m):02d}:{s:04.1f}]"
+
+
+class HardStop(BaseException):
+    """Injected into the worker thread by the Stop button to abort the job right
+    where it is. Subclasses BaseException, not Exception, on purpose: the job
+    loops guard every part with `except Exception`, so an Exception would be
+    swallowed and the run would carry on. BaseException blows straight through
+    those guards up to the worker's top-level handler."""
+
+
+def _async_raise(thread_ident: int, exc_type: type) -> None:
+    """Make the thread with `thread_ident` raise `exc_type` at its next Python
+    bytecode -- the mechanism behind the hard Stop. A stop that lands during a
+    blocking Boost/RDP call (a UIA lookup, say) fires the instant that call
+    returns, so it is near-immediate but not mid-C-call. Best effort: a stale id
+    affects 0 threads and is a no-op; the >1 case can't happen for a real ident
+    but we undo it defensively if the interpreter ever reports it."""
+    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(thread_ident), ctypes.py_object(exc_type))
+    if res > 1:
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(thread_ident), None)
 
 
 class _Done:
@@ -98,6 +126,7 @@ class App:
         self.q: queue.Queue = queue.Queue()
         self.worker: threading.Thread | None = None
         self._cancelled = False
+        self._stopped = False
         self._t0 = time.monotonic()   # elapsed-stamp origin; re-zeroed when a job
                                       # Starts (see _start) so stamps read as job
                                       # time. Until then, time-since-launch.
@@ -164,6 +193,9 @@ class App:
         self.cancel_btn = ttk.Button(btns, text="Cancel", command=self._cancel,
                                      state="disabled")
         self.cancel_btn.pack(side="left", padx=4)
+        self.stop_btn = ttk.Button(btns, text="Stop", command=self._stop,
+                                   state="disabled")
+        self.stop_btn.pack(side="left", padx=4)
         ttk.Button(btns, text="Save Log...", command=self._save_log
                    ).pack(side="right", padx=(4, 8))
         ttk.Button(btns, text="Clear Log", command=self._clear_log
@@ -289,6 +321,7 @@ class App:
         )
 
         self._cancelled = False
+        self._stopped = False
         self._set_running(True)
         # Zero the elapsed-time clock here so every stamp measures JOB time, not
         # time-since-launch: the operator's reading-the-panel pause and the
@@ -302,7 +335,7 @@ class App:
         scope = f"{len(part_names)} listed part(s)" if part_names else "every part in the Home list"
         self._append(f"\n===== START: {label}, {scope} =====")
         self.status.configure(
-            text=f"Running ({label})... Cancel stops before the next part.")
+            text=f"Running ({label})... Cancel = after this part; Stop = now.")
         self.worker = threading.Thread(target=self._worker, args=(params,),
                                        daemon=True)
         self.worker.start()
@@ -320,17 +353,42 @@ class App:
         except Exception:
             pass  # the worker's own import failed too; it never started the job
 
+    def _stop(self) -> None:
+        """Hard stop: abort the run right where it is, wherever that is -- unlike
+        Cancel, which lets the current part finish and recover to Home. Boost may
+        be left mid-part; that's the trade for stopping now. Works by injecting
+        HardStop into the worker thread (fires at the next Python bytecode) with
+        the cooperative STOP flag set as a backstop for the between-parts check
+        and the start-delay countdown."""
+        if not (self.worker and self.worker.is_alive()):
+            return
+        self._stopped = True
+        self.stop_btn.configure(state="disabled")
+        self.cancel_btn.configure(state="disabled")
+        self.status.configure(text="STOPPING NOW -- aborting wherever the job is...")
+        self._append("[STOP -- hard-stopping now; Boost may be left mid-part]")
+        try:
+            from .stencil_runner import request_stop
+            request_stop()
+        except Exception:
+            pass
+        _async_raise(self.worker.ident, HardStop)
+
     def _set_running(self, running: bool) -> None:
         state = "disabled" if running else "normal"
         for w in self._inputs:
             w.configure(state=state)
         self.start_btn.configure(state="disabled" if running else "normal")
         self.cancel_btn.configure(state="normal" if running else "disabled")
+        self.stop_btn.configure(state="normal" if running else "disabled")
 
     # ---------------------------------------------------------------- worker
 
     def _worker(self, params: dict) -> None:
-        """Runs in a background thread. Only talks to the UI via the queue."""
+        """Runs in a background thread. Only talks to the UI via the queue. The
+        whole body sits under one HardStop guard so the Stop button can inject
+        that exception at any point -- imports, countdown, or mid-part -- and it
+        always lands here as a clean abort rather than a dead thread."""
         log = self.q.put
         try:
             try:
@@ -338,43 +396,47 @@ class App:
                 comtypes.CoInitialize()   # COM for pywinauto, in THIS thread
             except Exception:
                 pass
-            from .stencil_runner import STOP
-            from .full_runner import run_full_job
-        except Exception as exc:  # noqa: BLE001 - report into the log pane
-            log(f"Could not load the automation stack: {exc!r}")
-            log("On the workstation run:  pip install --user -r requirements.txt")
-            self.q.put(_Done(False))
-            return
+            try:
+                from .stencil_runner import STOP
+                from .full_runner import run_full_job
+            except Exception as exc:  # noqa: BLE001 - report into the log pane
+                log(f"Could not load the automation stack: {exc!r}")
+                log("On the workstation run:  pip install --user -r requirements.txt")
+                self.q.put(_Done(False))
+                return
 
-        STOP.clear()
-        try:
-            if params["delay"]:
-                log(f"Starting in {params['delay']}s -- put Boost on the Home screen.")
-                for i in range(params["delay"], 0, -1):
-                    if STOP.is_set():
-                        log("Cancelled during countdown -- nothing was run.")
-                        self.q.put(_Done(False))
-                        return
-                    log(f"  {i}...")
-                    time.sleep(1)
-            t0 = time.time()
-            ok = run_full_job(part_names=params["parts"],
-                              target_font=params["font"],
-                              angular=params["angular"],
-                              do_stencil=params["do_stencil"],
-                              do_cut=params["do_cut"],
-                              max_consecutive_failures=params["max_failures"],
-                              log=log)
-            log(f"Elapsed: {time.time() - t0:.0f}s")
-            self.q.put(_Done(ok))
-        except ImportError as exc:
-            # pywinauto imports lazily inside BoostUIA(), so a missing package
-            # surfaces here rather than at module import above.
-            log(f"Missing dependency: {exc!r}")
-            log("On the workstation run:  pip install --user -r requirements.txt")
-            self.q.put(_Done(False))
-        except Exception as exc:  # noqa: BLE001 - surface, don't kill the UI
-            log(f"Job crashed: {exc!r}")
+            STOP.clear()
+            try:
+                if params["delay"]:
+                    log(f"Starting in {params['delay']}s -- put Boost on the Home screen.")
+                    for i in range(params["delay"], 0, -1):
+                        if STOP.is_set():
+                            log("Cancelled during countdown -- nothing was run.")
+                            self.q.put(_Done(False))
+                            return
+                        log(f"  {i}...")
+                        time.sleep(1)
+                t0 = time.time()
+                ok = run_full_job(part_names=params["parts"],
+                                  target_font=params["font"],
+                                  angular=params["angular"],
+                                  do_stencil=params["do_stencil"],
+                                  do_cut=params["do_cut"],
+                                  max_consecutive_failures=params["max_failures"],
+                                  log=log)
+                log(f"Elapsed: {time.time() - t0:.0f}s")
+                self.q.put(_Done(ok))
+            except ImportError as exc:
+                # pywinauto imports lazily inside BoostUIA(), so a missing package
+                # surfaces here rather than at module import above.
+                log(f"Missing dependency: {exc!r}")
+                log("On the workstation run:  pip install --user -r requirements.txt")
+                self.q.put(_Done(False))
+            except Exception as exc:  # noqa: BLE001 - surface, don't kill the UI
+                log(f"Job crashed: {exc!r}")
+                self.q.put(_Done(False))
+        except HardStop:
+            log("[hard-stopped -- run aborted; Boost may be left mid-part]")
             self.q.put(_Done(False))
 
     # ------------------------------------------------------------------ poll
@@ -397,7 +459,10 @@ class App:
 
     def _finish(self, ok: bool) -> None:
         self._set_running(False)
-        if self._cancelled:
+        if self._stopped:
+            self.status.configure(
+                text="Hard-stopped. Check Boost -- it may be mid-part.")
+        elif self._cancelled:
             self.status.configure(text="Stopped by Cancel. Boost is back on Home.")
         elif ok:
             self.status.configure(text="Job finished -- all parts done.")

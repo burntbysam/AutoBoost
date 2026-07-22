@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.17** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.18** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -98,7 +98,7 @@ counts down 5 s, processes every part, and prints a `done/skipped` tally.
 
 **Control panel (GUI):**
 ```
-py -m autoboost.gui          # window with Start/Cancel and a live log
+py -m autoboost.gui          # window with Start/Cancel/Stop and a live log
 pyw -m autoboost.gui         # same, without a console window
 ```
 All three jobs from one window: pick the mode (stencil + cut / stencil only /
@@ -106,7 +106,11 @@ cut only), optionally list specific parts, hit **Start**. The log pane shows
 exactly what the console runners would print, and **Save Log…** writes it to a
 file. **Cancel** is graceful — the run stops before the *next* part, so the
 current part finishes (or recovers to Home) and nothing is left half-done.
-Uses tkinter (ships with Python): nothing extra to install.
+**Stop** (0.7.18) is the hard version — it aborts the run right where it is,
+no waiting for the part boundary, at the cost of possibly leaving Boost
+mid-part for you to clean up by hand; prefer Cancel unless a part is stuck and
+you need it to quit now. Uses tkinter (ships with Python): nothing extra to
+install.
 
 On every launch the panel **checks for a newer version** (a git fetch of this
 branch) and asks before installing it; after an update, relaunch to run the
