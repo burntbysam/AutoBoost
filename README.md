@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.19** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.20** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -61,15 +61,19 @@ the marking is clear of edges/holes → close → next part.
   five correctly-placed parts in a row; those diffs are now ignored, while a
   stamp in the void still fails because it appears AT the expected point,
   far from the part body.
-- **Dialog-aware recovery** (0.7.19): when a part fails mid-cycle, closing its
-  unsaved Design/Cut window makes Boost pop a "Save changes?" prompt. The old
+- **Dialog-aware recovery** (0.7.19–0.7.20): when a part fails mid-cycle, closing
+  its unsaved Design/Cut window makes Boost pop a "Save changes?" prompt. The old
   recovery ignored it, so it was left up and blocked the next part — one stuck
   part cascaded a whole run (the 0.7.18 logs). Recovery now finds stray Boost
   prompts (scoped to the Boost process, so it never touches another app),
   dismisses them by clicking only safe buttons — Don't Save / No / Cancel / OK,
   never Save/Yes/Exit — closes any leftover window, and confirms a clean Home.
-  If it genuinely can't get back to Home it **stops the run** instead of
-  plowing the next part into a broken screen.
+  The close itself is hardened (0.7.20): it foregrounds the window over RDP
+  (Win32 SetForegroundWindow, not just set_focus), sends several Esc to cancel
+  any active tool/sketch command that would swallow the close key, then `3`, then
+  Alt+F4 as a fallback — and logs which path worked. If it genuinely can't get
+  back to Home it **stops the run** instead of plowing the next part into a
+  broken screen.
 - **Navigation** (parts list, open/save/close, the Properties/font chain) is
   driven by Windows UI Automation where possible — no fragile image templates —
   with mouse/keyboard for the two owner-drawn dropdowns and the drawing canvas.

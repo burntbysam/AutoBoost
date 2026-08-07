@@ -291,13 +291,49 @@ class BoostUIA:
             return False
         return True
 
+    def _foreground(self, win) -> None:
+        """Bring a window to the foreground so keystrokes actually reach it.
+        set_focus() alone is unreliable over RDP -- the normal part cycle leans
+        on physical canvas clicks to focus -- so also drive Win32
+        SetForegroundWindow via the native handle (argtypes set so a 64-bit HWND
+        isn't truncated). Best effort."""
+        import time
+        try:
+            win.set_focus()
+        except Exception:
+            pass
+        try:
+            import ctypes
+            from ctypes import wintypes
+            hwnd = win.handle
+            if hwnd:
+                user32 = ctypes.windll.user32
+                user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+                user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+        time.sleep(0.2)
+
+    def _cancel_active_command(self) -> None:
+        """Press Esc a few times to cancel any active tool / text-edit / sketch
+        selection. A part that fails mid-cycle often leaves such a command
+        running (the 'Click to select... Drag to edit your sketch' prompt), and
+        it swallows the Design close key, so recovery must clear it first."""
+        import time
+        import pyautogui
+        for _ in range(4):
+            pyautogui.press("esc")
+            time.sleep(0.2)
+
     def recover_to_home(self, log=print, max_rounds: int = 5) -> bool:
         """Drive Boost back to a clean Home from any stuck state. Each round:
-        dismiss stray dialogs, close a Cut window, close a Design view (handling
-        the Save-changes prompt each close can raise), then check for a clean
-        Home. Returns True once Home is confirmed clean, False if it can't get
-        there -- the caller should stop the run rather than start another part on
-        a broken window."""
+        dismiss stray dialogs, close a Cut window, close a Design view -- first
+        cancelling any active command, then the '3' shortcut, then Alt+F4 as a
+        fallback -- handling the Save-changes prompt each close can raise, then
+        check for a clean Home. Logs which close path worked so a failing run is
+        diagnosable. Returns True once Home is confirmed clean, False if it can't
+        get there -- the caller should stop the run rather than start another
+        part on a broken window."""
         import time
         import pyautogui
 
@@ -314,26 +350,38 @@ class BoostUIA:
             acted = clear_dialogs()
 
             if self.has_cut():
-                try:
-                    self.cut().wrapper_object().set_focus()
-                except Exception:
-                    pass
+                self._foreground(self.cut().wrapper_object())
+                self._cancel_active_command()
                 pyautogui.hotkey("alt", "f4")
                 time.sleep(1.2)
-                acted += clear_dialogs()      # a save prompt may follow the close
+                acted += clear_dialogs() + 1  # a save prompt may follow the close
                 self.reset()
 
             if self.has_design(timeout=0.5):
-                try:
-                    self.design().wrapper_object().set_focus()
-                except Exception:
-                    pass
-                pyautogui.press("esc")
-                time.sleep(0.3)
-                pyautogui.press("3")          # close Design view
+                acted += 1
+                self._foreground(self.design().wrapper_object())
+                self._cancel_active_command()   # clear the active tool first
+                pyautogui.press("3")            # Boost close-Design shortcut
                 time.sleep(1.5)
-                acted += clear_dialogs()      # closing an unsaved part prompts
+                clear_dialogs()                 # unsaved close -> save prompt
                 self.reset()
+                if self.has_design(timeout=0.5):
+                    # The shortcut didn't take (a command still had the keys, or
+                    # focus didn't land) -- force the window closed.
+                    log("  recovery: '3' did not close Design -- trying Alt+F4")
+                    try:
+                        self._foreground(self.design().wrapper_object())
+                    except Exception:
+                        pass
+                    pyautogui.hotkey("alt", "f4")
+                    time.sleep(1.2)
+                    clear_dialogs()
+                    self.reset()
+                    log("  recovery: Design still open after Alt+F4"
+                        if self.has_design(timeout=0.5)
+                        else "  recovery: closed Design (Alt+F4)")
+                else:
+                    log("  recovery: closed Design (3)")
 
             if self.on_home():
                 if acted or rnd > 1:
