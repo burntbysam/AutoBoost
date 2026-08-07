@@ -26,6 +26,7 @@ method, not exercised by the self-test.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 HOME_TITLE = "TruTops Boost - HomeZone"
@@ -61,6 +62,42 @@ def _value(wrapper) -> str:
         except Exception:
             continue
     return ""
+
+
+# Dialog buttons recovery is allowed to click, best-first. Deliberately
+# conservative: only ever DISMISS or DISCARD. We never click a button that would
+# SAVE (a half-finished / bad part is better lost than saved), confirm ("Yes"),
+# or close Boost ("Exit"/"Quit"). Anything outside this set falls through to Esc.
+_SAFE_DIALOG_BUTTONS = ("don't save", "do not save", "discard", "no",
+                        "cancel", "ok", "close")
+_UNSAFE_DIALOG_WORDS = ("save", "yes", "exit", "quit")
+
+
+def _button_is_safe(label: str) -> bool:
+    """Is this (already-normalized) dialog-button label safe to click during
+    recovery? 'Don't Save' / 'Do not save' are allowed even though they contain
+    'save'; anything else carrying save/yes/exit/quit is not (e.g. 'Save and
+    Close' must not be clicked just because it ends in 'Close')."""
+    if label.startswith("don't") or label.startswith("do not"):
+        return True
+    return not any(bad in label for bad in _UNSAFE_DIALOG_WORDS)
+
+
+def _choose_dialog_button(labels) -> str | None:
+    """Given the button labels on a dialog, return the label to click (best-first
+    among the safe set) or None to fall back to Esc. Pure logic -- unit-tested
+    without a live window. Matching is case/punctuation-insensitive; the returned
+    value is the normalized label (lowercased, trailing dots stripped)."""
+    norm = []
+    for lbl in labels:
+        n = (lbl or "").strip().lower().rstrip(".")
+        if n and n not in norm:
+            norm.append(n)
+    for want in _SAFE_DIALOG_BUTTONS:
+        for n in norm:
+            if want in n and _button_is_safe(n):
+                return n
+    return None
 
 
 class BoostUIA:
@@ -151,6 +188,161 @@ class BoostUIA:
             if self.has_home():
                 return True
             time.sleep(poll)
+        return False
+
+    # -- recovery: reset to a known-good Home from any stuck state -----------
+    #
+    # The job loops assume every part starts from a clean Home. A part that fails
+    # mid-cycle can leave Boost anywhere -- a Design/Cut window still open, or
+    # (the case that cascaded a whole run in the 0.7.18 logs) a modal
+    # "Save changes?" prompt left over from closing an unsaved part, which then
+    # blocks every hotkey the next part sends. recover_to_home() drives Boost
+    # back to Home whichever of those it finds, dismissing stray prompts safely,
+    # and reports whether it actually got there so the runner can STOP instead of
+    # plowing the next part into a broken window.
+
+    def _boost_pid(self):
+        """PID of the Boost process, from whichever of its windows exists. A
+        modal prompt disables but does not destroy them, so this still resolves
+        while a dialog is up. None if no Boost window is found at all."""
+        for getter in (self.home, self.design, self.cut):
+            try:
+                spec = getter()
+                if spec.exists(timeout=0.3):
+                    return spec.wrapper_object().process_id()
+            except Exception:
+                continue
+        return None
+
+    def stray_dialogs(self, pid=None) -> list:
+        """Top-level Boost windows that are NOT Home/Design/Cut -- i.e. modal
+        prompts (Save changes?, exit confirmations, error boxes). Scoped to the
+        Boost PID so we can never touch another app's -- or AutoBoost's own --
+        windows. Empty if the PID can't be resolved: we won't guess."""
+        pid = pid if pid is not None else self._boost_pid()
+        if pid is None:
+            return []
+        try:
+            wins = self.desktop.windows(top_level_only=True, visible_only=True,
+                                        enabled_only=True)
+        except Exception:
+            return []
+        out = []
+        for w in wins:
+            try:
+                if w.process_id() != pid:
+                    continue
+                title = _text(w)
+                if (title == HOME_TITLE
+                        or re.match(DESIGN_TITLE_RE, title)
+                        or re.match(CUT_TITLE_RE, title)):
+                    continue
+                out.append(w)
+            except Exception:
+                continue
+        return out
+
+    def dismiss_dialog(self, win, log=print) -> str:
+        """Close one stray dialog by clicking a SAFE button (see
+        _choose_dialog_button), falling back to Esc. `win` is a wrapper from
+        stray_dialogs(). Returns the label clicked, 'esc', or '' if nothing
+        worked."""
+        import pyautogui
+        title = _text(win) or "<untitled>"
+        buttons = {}
+        try:
+            for b in win.descendants(control_type="Button"):
+                n = _text(b).strip().lower().rstrip(".")
+                if n and n not in buttons:
+                    buttons[n] = b
+        except Exception:
+            buttons = {}
+        try:
+            win.set_focus()
+        except Exception:
+            pass
+        choice = _choose_dialog_button(buttons.keys())
+        if choice is not None and choice in buttons:
+            try:
+                buttons[choice].click_input()
+                log(f"  recovery: dialog {title!r} -> clicked {choice!r}")
+                return choice
+            except Exception:
+                pass
+        try:
+            pyautogui.press("esc")
+            log(f"  recovery: dialog {title!r} -> Esc")
+            return "esc"
+        except Exception:
+            return ""
+
+    def on_home(self) -> bool:
+        """True only if Home is up and nothing is in the way: no Design, no Cut,
+        no stray dialog. Reads fresh handles (clears the cache) so a stale spec
+        can't report a window that is actually gone."""
+        self._home = self._design = self._cut = None
+        if not self.has_home():
+            return False
+        if self.has_design(timeout=0.3):
+            return False
+        if self.has_cut():
+            return False
+        if self.stray_dialogs():
+            return False
+        return True
+
+    def recover_to_home(self, log=print, max_rounds: int = 5) -> bool:
+        """Drive Boost back to a clean Home from any stuck state. Each round:
+        dismiss stray dialogs, close a Cut window, close a Design view (handling
+        the Save-changes prompt each close can raise), then check for a clean
+        Home. Returns True once Home is confirmed clean, False if it can't get
+        there -- the caller should stop the run rather than start another part on
+        a broken window."""
+        import time
+        import pyautogui
+
+        def clear_dialogs() -> int:
+            n = 0
+            for d in self.stray_dialogs():
+                self.dismiss_dialog(d, log=log)
+                n += 1
+                time.sleep(0.8)
+            return n
+
+        for rnd in range(1, max_rounds + 1):
+            self.reset()
+            acted = clear_dialogs()
+
+            if self.has_cut():
+                try:
+                    self.cut().wrapper_object().set_focus()
+                except Exception:
+                    pass
+                pyautogui.hotkey("alt", "f4")
+                time.sleep(1.2)
+                acted += clear_dialogs()      # a save prompt may follow the close
+                self.reset()
+
+            if self.has_design(timeout=0.5):
+                try:
+                    self.design().wrapper_object().set_focus()
+                except Exception:
+                    pass
+                pyautogui.press("esc")
+                time.sleep(0.3)
+                pyautogui.press("3")          # close Design view
+                time.sleep(1.5)
+                acted += clear_dialogs()      # closing an unsaved part prompts
+                self.reset()
+
+            if self.on_home():
+                if acted or rnd > 1:
+                    log("  recovery: back on a clean Home.")
+                return True
+            time.sleep(0.6)
+
+        log("  recovery: could NOT reach a clean Home -- stopping is safer "
+            "than starting another part here.")
         return False
 
     # -- HomeZone: part list ------------------------------------------------

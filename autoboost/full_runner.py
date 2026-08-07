@@ -28,26 +28,18 @@ from .full_cycle import process_full_part
 from .stencil_runner import _stop_requested
 
 
-def _recover_to_home(boost: BoostUIA, log=print) -> None:
-    """Best effort: get back to Home so the next part can start, whichever window
-    a failed cycle left open. A stuck Cut window closes with Alt+F4; a stuck
-    Design view closes with '3'."""
+def _recover_to_home(boost: BoostUIA, log=print) -> bool:
+    """Get back to a clean Home after a failed part, whatever it left open --
+    including a "Save changes?" prompt from closing an unsaved part, which the
+    old best-effort close ignored and which then cascaded into the next part
+    (the 0.7.18 run). Delegates to BoostUIA.recover_to_home, which dismisses
+    stray dialogs safely, closes any Cut/Design window, and verifies a clean
+    Home. Returns whether it actually got there."""
     try:
-        import pyautogui
-        pyautogui.press("esc")
-        time.sleep(0.3)
-        boost.reset()
-        if boost.has_cut():
-            pyautogui.hotkey("alt", "f4")
-            time.sleep(1.5)
-            boost.reset()
-        if boost.has_design():
-            pyautogui.press("3")   # close Design view
-            time.sleep(2.0)
-            boost.reset()
-        log("  (recovered to Home)")
-    except Exception:
-        pass
+        return boost.recover_to_home(log=log)
+    except Exception as exc:  # noqa: BLE001 - never let recovery itself crash the run
+        log(f"  recovery error: {exc!r}")
+        return False
 
 
 def run_full_job(part_names: list[str] | None = None,
@@ -103,7 +95,9 @@ def run_full_job(part_names: list[str] | None = None,
             skipped += 1
             consec += 1
             log(f"  SKIP (done={done} skipped={skipped})")
-            _recover_to_home(boost, log)
+            if not _recover_to_home(boost, log):
+                log("Could not return to a clean Home -- stopping the run so a "
+                    "stuck part can't cascade into the rest."); break
             if consec >= max_consecutive_failures:
                 log("Too many consecutive failures -- stopping."); break
 
