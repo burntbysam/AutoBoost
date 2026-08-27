@@ -201,45 +201,129 @@ class BoostUIA:
     # and reports whether it actually got there so the runner can STOP instead of
     # plowing the next part into a broken window.
 
-    def _boost_pid(self):
-        """PID of the Boost process, from whichever of its windows exists. A
-        modal prompt disables but does not destroy them, so this still resolves
-        while a dialog is up. None if no Boost window is found at all."""
+    def _boost_windows(self) -> list:
+        """Wrappers for whichever of Home/Design/Cut currently exist. A modal
+        prompt disables but does not destroy them, so these still resolve while
+        a dialog is up."""
+        out = []
         for getter in (self.home, self.design, self.cut):
             try:
                 spec = getter()
                 if spec.exists(timeout=0.3):
-                    return spec.wrapper_object().process_id()
+                    out.append(spec.wrapper_object())
             except Exception:
                 continue
+        return out
+
+    def _boost_pids(self) -> set:
+        """PIDs of ALL processes owning a Boost window. Home (WPF) and Design
+        (WinForms) are different UI stacks and can be different processes, so a
+        single first-found PID is not enough -- the 0.7.20 run's save prompt was
+        invisible to a scan keyed on HomeZone's PID alone."""
+        pids = set()
+        for w in self._boost_windows():
+            try:
+                pids.add(w.process_id())
+            except Exception:
+                continue
+        return pids
+
+    def _enabled_popup_of(self, win):
+        """The enabled popup that blocks `win` -- the OS's own pointer to the
+        modal dialog a window is waiting on (Win32 GetWindow GW_ENABLEDPOPUP).
+        PID- and title-independent, so it finds the Save-changes prompt no
+        matter which process raised it. None if there isn't one."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            hwnd = win.handle
+            if not hwnd:
+                return None
+            user32 = ctypes.windll.user32
+            user32.GetWindow.argtypes = [wintypes.HWND, ctypes.c_uint]
+            user32.GetWindow.restype = wintypes.HWND
+            GW_ENABLEDPOPUP = 6
+            pop = user32.GetWindow(hwnd, GW_ENABLEDPOPUP)
+            if pop and pop != hwnd:
+                return self.desktop.window(handle=pop).wrapper_object()
+        except Exception:
+            pass
         return None
 
-    def stray_dialogs(self, pid=None) -> list:
-        """Top-level Boost windows that are NOT Home/Design/Cut -- i.e. modal
-        prompts (Save changes?, exit confirmations, error boxes). Scoped to the
-        Boost PID so we can never touch another app's -- or AutoBoost's own --
-        windows. Empty if the PID can't be resolved: we won't guess."""
-        pid = pid if pid is not None else self._boost_pid()
-        if pid is None:
-            return []
+    def _foreground_title(self) -> str:
+        """Title of the current OS foreground window -- where keystrokes are
+        actually going. Diagnostic only."""
         try:
-            wins = self.desktop.windows(top_level_only=True, visible_only=True,
-                                        enabled_only=True)
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+            h = user32.GetForegroundWindow()
+            if not h:
+                return ""
+            n = user32.GetWindowTextLengthW(h)
+            buf = ctypes.create_unicode_buffer(n + 2)
+            user32.GetWindowTextW(h, buf, n + 2)
+            return buf.value
         except Exception:
-            return []
-        out = []
-        for w in wins:
+            return ""
+
+    def stray_dialogs(self) -> list:
+        """Modal prompts blocking Boost (Save changes?, exit confirmations,
+        error boxes). Two detectors, results deduped:
+
+        1. each Boost window's ENABLED POPUP (GW_ENABLEDPOPUP) -- the OS's own
+           record of the modal a window is waiting on; immune to PID and title
+           surprises, and
+        2. any other visible top-level window owned by ANY Boost process whose
+           title is not Home/Design/Cut.
+
+        Scoped to Boost's own windows/processes so we can never touch another
+        app's -- or AutoBoost's own -- windows. Empty if nothing resolves: we
+        won't guess."""
+        out, seen = [], set()
+
+        def add(w):
             try:
-                if w.process_id() != pid:
-                    continue
-                title = _text(w)
-                if (title == HOME_TITLE
-                        or re.match(DESIGN_TITLE_RE, title)
-                        or re.match(CUT_TITLE_RE, title)):
-                    continue
+                h = w.handle or id(w)
+            except Exception:
+                h = id(w)
+            if h not in seen:
+                seen.add(h)
                 out.append(w)
+
+        mains = self._boost_windows()
+        for w in mains:
+            pop = self._enabled_popup_of(w)
+            if pop is not None:
+                add(pop)
+
+        pids = set()
+        for w in mains:
+            try:
+                pids.add(w.process_id())
             except Exception:
                 continue
+        if pids:
+            try:
+                wins = self.desktop.windows(top_level_only=True,
+                                            visible_only=True,
+                                            enabled_only=True)
+            except Exception:
+                wins = []
+            for w in wins:
+                try:
+                    if w.process_id() not in pids:
+                        continue
+                    title = _text(w)
+                    if (title == HOME_TITLE
+                            or re.match(DESIGN_TITLE_RE, title)
+                            or re.match(CUT_TITLE_RE, title)):
+                        continue
+                    add(w)
+                except Exception:
+                    continue
         return out
 
     def dismiss_dialog(self, win, log=print) -> str:
@@ -261,17 +345,20 @@ class BoostUIA:
             win.set_focus()
         except Exception:
             pass
+        labels = sorted(buttons)   # logged always: an unmatched dialog's real
+                                   # button names are the diagnosis we need
         choice = _choose_dialog_button(buttons.keys())
         if choice is not None and choice in buttons:
             try:
                 buttons[choice].click_input()
-                log(f"  recovery: dialog {title!r} -> clicked {choice!r}")
+                log(f"  recovery: dialog {title!r} (buttons={labels}) "
+                    f"-> clicked {choice!r}")
                 return choice
             except Exception:
                 pass
         try:
             pyautogui.press("esc")
-            log(f"  recovery: dialog {title!r} -> Esc")
+            log(f"  recovery: dialog {title!r} (buttons={labels}) -> Esc")
             return "esc"
         except Exception:
             return ""
@@ -325,15 +412,30 @@ class BoostUIA:
             pyautogui.press("esc")
             time.sleep(0.2)
 
+    def _design_gone(self, timeout: float = 4.0) -> bool:
+        """Poll until the Design window is gone (or timeout). Fresh handles each
+        poll so a stale cached spec can't report a closed window as open."""
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.reset()
+            if not self.has_design(timeout=0.3):
+                return True
+            time.sleep(0.4)
+        return False
+
     def recover_to_home(self, log=print, max_rounds: int = 5) -> bool:
         """Drive Boost back to a clean Home from any stuck state. Each round:
         dismiss stray dialogs, close a Cut window, close a Design view -- first
-        cancelling any active command, then the '3' shortcut, then Alt+F4 as a
-        fallback -- handling the Save-changes prompt each close can raise, then
-        check for a clean Home. Logs which close path worked so a failing run is
-        diagnosable. Returns True once Home is confirmed clean, False if it can't
-        get there -- the caller should stop the run rather than start another
-        part on a broken window."""
+        cancelling any active command, then the '3' shortcut, DISMISSING the
+        Save-changes prompt the close raises and waiting for the window to
+        actually go, then Alt+F4 as a fallback -- then check for a clean Home.
+        Logs which close path worked, and on a stuck close logs the foreground
+        window and whether Design is disabled (disabled = a modal is up even if
+        we couldn't find it), so a failing run is diagnosable from the log
+        alone. Returns True once Home is confirmed clean, False if it can't get
+        there -- the caller should stop the run rather than start another part
+        on a broken window."""
         import time
         import pyautogui
 
@@ -345,43 +447,63 @@ class BoostUIA:
                 time.sleep(0.8)
             return n
 
+        def design_stuck_detail() -> str:
+            fg = self._foreground_title()
+            enabled = None
+            try:
+                enabled = self.design().wrapper_object().is_enabled()
+            except Exception:
+                pass
+            return f"foreground={fg!r}, design_enabled={enabled}"
+
         for rnd in range(1, max_rounds + 1):
             self.reset()
             acted = clear_dialogs()
 
             if self.has_cut():
+                acted += 1
                 self._foreground(self.cut().wrapper_object())
                 self._cancel_active_command()
                 pyautogui.hotkey("alt", "f4")
                 time.sleep(1.2)
-                acted += clear_dialogs() + 1  # a save prompt may follow the close
+                clear_dialogs()               # a save prompt may follow the close
                 self.reset()
+                if self.has_cut():
+                    log("  recovery: Cut window did not close")
 
             if self.has_design(timeout=0.5):
                 acted += 1
-                self._foreground(self.design().wrapper_object())
+                try:
+                    self._foreground(self.design().wrapper_object())
+                except Exception:
+                    pass
                 self._cancel_active_command()   # clear the active tool first
                 pyautogui.press("3")            # Boost close-Design shortcut
                 time.sleep(1.5)
-                clear_dialogs()                 # unsaved close -> save prompt
-                self.reset()
-                if self.has_design(timeout=0.5):
-                    # The shortcut didn't take (a command still had the keys, or
-                    # focus didn't land) -- force the window closed.
-                    log("  recovery: '3' did not close Design -- trying Alt+F4")
+                # Closing an unsaved part raises the Save-changes prompt -- the
+                # case that cascaded 0.7.18 and stalled 0.7.19/0.7.20. Dismiss
+                # it, THEN give the close time to finish before judging '3'.
+                dismissed = clear_dialogs()
+                if self._design_gone(timeout=4.0 if dismissed else 2.0):
+                    log("  recovery: closed Design (3%s)"
+                        % (" + dialog" if dismissed else ""))
+                else:
+                    log(f"  recovery: '3' did not close Design "
+                        f"({design_stuck_detail()}) -- trying Alt+F4")
                     try:
                         self._foreground(self.design().wrapper_object())
                     except Exception:
                         pass
                     pyautogui.hotkey("alt", "f4")
                     time.sleep(1.2)
-                    clear_dialogs()
-                    self.reset()
-                    log("  recovery: Design still open after Alt+F4"
-                        if self.has_design(timeout=0.5)
-                        else "  recovery: closed Design (Alt+F4)")
-                else:
-                    log("  recovery: closed Design (3)")
+                    dismissed = clear_dialogs()
+                    if self._design_gone(timeout=4.0 if dismissed else 2.0):
+                        log("  recovery: closed Design (Alt+F4%s)"
+                            % (" + dialog" if dismissed else ""))
+                    else:
+                        log(f"  recovery: Design still open after Alt+F4 "
+                            f"({design_stuck_detail()})")
+                self.reset()
 
             if self.on_home():
                 if acted or rnd > 1:
@@ -391,6 +513,23 @@ class BoostUIA:
 
         log("  recovery: could NOT reach a clean Home -- stopping is safer "
             "than starting another part here.")
+        # Census: what Boost actually has on screen, so the log alone can tell
+        # us what recovery was up against.
+        log(f"  recovery: foreground window is {self._foreground_title()!r}")
+        try:
+            pids = self._boost_pids()
+            for w in self.desktop.windows(top_level_only=True):
+                try:
+                    if pids and w.process_id() not in pids:
+                        continue
+                    log(f"    boost window: {_text(w)!r} "
+                        f"class={w.element_info.class_name!r} "
+                        f"pid={w.process_id()} enabled={w.is_enabled()} "
+                        f"visible={w.is_visible()}")
+                except Exception:
+                    continue
+        except Exception:
+            pass
         return False
 
     # -- HomeZone: part list ------------------------------------------------
