@@ -107,6 +107,65 @@ def test_never_clicks_anything_dangerous_across_cases():
         assert _clicked_is_never_dangerous(labels), labels
 
 
+
+
+# --- phantom-window filter (0.7.23) ------------------------------------------
+# Recovery in the 0.7.22 run pressed Esc at Design's untitled, button-less
+# floating tool strips 194 times. _looks_like_dialog keeps those out of
+# stray_dialogs while the real prompts (titled, or carrying labelled buttons)
+# stay in.
+
+from autoboost.navigator.boost_uia import _looks_like_dialog
+
+
+class _FakeButton:
+    def __init__(self, name):
+        self._name = name
+
+    def window_text(self):
+        return self._name
+
+
+class _FakeWindow:
+    def __init__(self, title="", buttons=(), boom=False):
+        self._title, self._buttons, self._boom = title, list(buttons), boom
+
+    def window_text(self):
+        if self._boom:
+            raise RuntimeError("window vanished")
+        return self._title
+
+    def descendants(self, control_type=None):
+        if self._boom:
+            raise RuntimeError("window vanished")
+        return [_FakeButton(b) for b in self._buttons]
+
+
+def test_phantom_tool_strip_is_not_a_dialog():
+    # The 194-Esc case: no title, no buttons -> leave it alone.
+    assert not _looks_like_dialog(_FakeWindow())
+    assert not _looks_like_dialog(_FakeWindow(title="   "))
+
+
+def test_real_save_prompt_is_a_dialog():
+    # The actual 0.7.22 prompt: titled AND buttoned.
+    assert _looks_like_dialog(_FakeWindow(
+        title="TruTops Boost - Design",
+        buttons=["Yes", "No", "Cancel", "Close"]))
+
+
+def test_untitled_but_buttoned_is_a_dialog():
+    assert _looks_like_dialog(_FakeWindow(buttons=["OK"]))
+
+
+def test_titled_but_buttonless_is_a_dialog():
+    assert _looks_like_dialog(_FakeWindow(title="Warning"))
+
+
+def test_vanished_window_is_not_a_dialog():
+    assert not _looks_like_dialog(_FakeWindow(boom=True))
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

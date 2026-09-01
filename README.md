@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.22** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.23** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -92,6 +92,19 @@ the marking is clear of edges/holes → close → next part.
   only as a fallback (Home foregrounded first, small steps), and the job log
   reports how the walk went (`(parts list walk: pattern, 18 steps, est ~140
   rows)`).
+- **Tiny markings select reliably** (0.7.23): the first full 140-part run drew a
+  hard line — every reselect of a marking ≤32px wide at Zoom Extents missed (48
+  parts skipped) while every ≥36px selection stuck. Selection now retries with
+  **escalating cursor-anchored zoom** (6 steps, then +5, then +5 more), using
+  the property grid's appearance as the oracle that the click actually landed
+  on the text; a part is only abandoned after three verified misses, with a
+  `select_fail` debug screenshot saved. Also from that run: the deselect click
+  settles the cursor before clicking and Escs afterwards, so an RDP-lagged
+  click can no longer rubber-band a marquee that verify counts as collision
+  (two false FAILs to date); screenshots retry once on a transient grab error;
+  a slow cutting-program 'Open' is retried once (with a late-arrival check);
+  and recovery no longer "dismisses" Design's untitled floating tool strips
+  (194 pointless Esc presses in one run).
 - **Navigation** (parts list, open/save/close, the Properties/font chain) is
   driven by Windows UI Automation where possible — no fragile image templates —
   with mouse/keyboard for the two owner-drawn dropdowns and the drawing canvas.

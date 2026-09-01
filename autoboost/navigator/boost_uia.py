@@ -100,6 +100,27 @@ def _choose_dialog_button(labels) -> str | None:
     return None
 
 
+def _looks_like_dialog(win) -> bool:
+    """Is this window an actual prompt worth dismissing -- does it have a title
+    or at least one labelled button? The Design view owns permanent untitled,
+    button-less popup windows (floating tool strips); the 0.7.22 run 'dismissed'
+    those 194 times to no effect. They are not dialogs: leave them alone. If an
+    exotic untitled, button-less modal ever does appear, the stuck-close
+    diagnostics (design_enabled=False + the window census) still surface it."""
+    try:
+        if (win.window_text() or "").strip():
+            return True
+    except Exception:
+        pass
+    try:
+        for b in win.descendants(control_type="Button"):
+            if _text(b).strip():
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _scroll_positions(view_size_pct) -> list[float]:
     """Vertical ScrollPattern stops (percent of the scroll range) that sweep a
     virtualized list top to bottom with overlap between consecutive viewports,
@@ -318,7 +339,8 @@ class BoostUIA:
                 h = id(w)
             if h not in seen:
                 seen.add(h)
-                out.append(w)
+                if _looks_like_dialog(w):   # skip Design's floating tool strips
+                    out.append(w)
 
         mains = self._boost_windows()
         for w in mains:
@@ -1039,8 +1061,21 @@ class BoostUIA:
         time.sleep(0.4)
 
         if not self.open_cut_program():
-            log(f"open cut program -> False ({self.last_value})")
-            return False
+            # One part in the 0.7.22 run lost its cut to a single slow open
+            # ('Cut window did not open'). The program row already exists, so
+            # retrying is safe -- but first check whether the window just
+            # arrived late, because clicking 'Open' onto an already-open Cut
+            # window could spawn a second one.
+            self.reset()
+            if self.has_cut():
+                log("cut program opened late (Cut window)")
+                return True
+            log(f"open cut program -> False ({self.last_value}); retrying once")
+            if not self.open_cut_program():
+                log(f"open cut program retry -> False ({self.last_value})")
+                return False
+            log("cut program opened on retry (Cut window)")
+            return True
         log("cut program opened (Cut window)")
         return True
 
@@ -1389,6 +1424,18 @@ class BoostUIA:
         except Exception:
             pass
         return self._table
+
+    def grid_ready(self) -> bool:
+        """Did the last canvas click actually select the placed text? The
+        property grid appearing is the oracle -- a missed click selects the part
+        face or nothing and no grid shows. Fast when the Table rect is cached
+        from an earlier part (hit-test, sub-second); one full tree resolve
+        (~7s) otherwise. Never raises: part_cycle's zoom-and-retry selection
+        loop keys off the bool."""
+        try:
+            return self._grid_table() is not None
+        except Exception:
+            return False
 
     def _options_panel(self):
         """Cached wrapper for the Design 'Options' side panel. The add-property

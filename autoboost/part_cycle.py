@@ -49,7 +49,13 @@ def _save_debug(image, tag: str, log=print) -> None:
 
 # Zoom the placement point up before selecting the (possibly tiny) text. Scroll
 # zoom is cursor-anchored, so the text stays under the point while it enlarges.
-SELECT_ZOOM_STEPS = 6
+# The 0.7.22 full run drew a hard line: every reselect of text <=32px wide at
+# Zoom Extents missed (48 of 140 parts) while every >=36px selection stuck --
+# a fixed 6-step zoom is not enough for a 10mm marking on a huge part. So
+# selection retries with ESCALATING zoom: each attempt adds the next entry's
+# steps on top of the zoom already applied (6, then +5, then +5 more), and the
+# property grid appearing is the oracle that the click landed on the text.
+SELECT_ZOOM_SCHEDULE = (6, 5, 5)
 SELECT_SCROLL = -300   # per step; NEGATIVE zooms in on this Boost -- flip if it zooms OUT
 
 
@@ -57,7 +63,15 @@ def _shot_bgr():
     import numpy as np
     import cv2
     import pyautogui
-    return cv2.cvtColor(np.array(pyautogui.screenshot()), cv2.COLOR_RGB2BGR)
+    for attempt in (1, 2):
+        try:
+            return cv2.cvtColor(np.array(pyautogui.screenshot()), cv2.COLOR_RGB2BGR)
+        except OSError:
+            # Transient RDP grab hiccup -- one part of the 0.7.22 run died on a
+            # single 'screen grab failed'. One settle-and-retry rescues it.
+            if attempt == 2:
+                raise
+            time.sleep(1.0)
 
 
 def _zoom_at(px: int, py: int, steps: int, per_step: int) -> None:
@@ -164,26 +178,35 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
     time.sleep(t.after_esc)
     log(f"placed part-number text at ({px},{py}); tool exited")
 
-    # 3b. Zoom in at the placement point so a tiny text (large part) becomes big
-    #     enough to click reliably. Cursor-anchored, so it stays under (px,py).
-    _zoom_at(px, py, SELECT_ZOOM_STEPS, SELECT_SCROLL)
-    log("zoomed in for selection")
-
-    # 4. Select the placed text. Boost ignores a click on the exact same pixel
-    #    just used to place, so nudge a few px -- still on the (now larger) text.
+    # 3b+4. Zoom in at the placement point and select the placed text, VERIFYING
+    #     the selection took before moving on. Zoom is cursor-anchored so the
+    #     text stays under (px,py) while it grows; each retry adds more zoom
+    #     (see SELECT_ZOOM_SCHEDULE) and re-clicks. The property grid appearing
+    #     is the oracle that the click landed on the text -- a miss selects the
+    #     part face or nothing, and no grid shows. Boost ignores a click on the
+    #     exact pixel just used to place, hence the +3px nudge.
+    #     Grid-resolution timing note: the first resolve of a run walks the tree
+    #     (~7s); later parts hit the cached rect (~0.5s) -- same as 0.7.15+.
+    grid_buttons = None
     sx, sy = px + 3, py + 3
-    pyautogui.click(sx, sy)
-    time.sleep(t.after_panel_open)
-    log(f"selected placed text (click at {sx},{sy})")
-
-    # 5. Font: add the Font type property if absent, then set EasyType-L=10mm.
-    # The 0.7.15 split proved this block is entirely the grid Table resolution
-    # (child_window(auto_id='propertyGrid1') descendant walk, ~7.5s). 0.7.15+
-    # caches the Table rect and hit-tests it on later parts, so this should drop
-    # to ~0.5s from part 2 on -- timed here so the next log shows the win.
-    _t0 = time.monotonic()
-    grid_buttons = boost._grid_controls()["buttons"]
-    log(f"property grid ready (+{time.monotonic() - _t0:.1f}s)")
+    for attempt, steps in enumerate(SELECT_ZOOM_SCHEDULE, 1):
+        _zoom_at(px, py, steps, SELECT_SCROLL)
+        pyautogui.click(sx, sy)
+        time.sleep(t.after_panel_open)
+        _t0 = time.monotonic()
+        if boost.grid_ready():
+            grid_buttons = boost._grid_controls()["buttons"]
+            log(f"selected placed text (click at {sx},{sy}, attempt {attempt}); "
+                f"property grid ready (+{time.monotonic() - _t0:.1f}s)")
+            break
+        log(f"selection attempt {attempt} missed (no property grid, "
+            f"+{time.monotonic() - _t0:.1f}s) -- zooming in further")
+        pyautogui.press("esc")          # drop whatever the missed click selected
+        time.sleep(t.after_esc)
+    if grid_buttons is None:
+        _save_debug(_shot_bgr(), "select_fail", log)
+        log("could not select the placed text -- aborting part")
+        return False
     if "Font type" not in grid_buttons:
         added = boost.add_font_type()
         log(f"add Font type -> {added} ({boost.last_value})")
@@ -206,8 +229,19 @@ def process_open_part(target_font: str = "EasyType-L=10mm",
     time.sleep(t.after_esc)
     off = max(25, min(60, int(res.clearance_px) - 10))
     dead_x, dead_y = px, py + off
+    # Move first and let the cursor settle before clicking: a click issued while
+    # the pointer is still travelling can register as a DRAG over RDP, rubber-
+    # banding a marquee selection whose edges verify then counts as collision
+    # pixels (false-FAILed 8701204I-2 in 0.7.18 and 8640213I-03 in 0.7.22). The
+    # trailing Esc clears any marquee that slips through anyway -- with nothing
+    # selected it is a no-op, and it does not steal the canvas focus the next
+    # Zoom-Extents hotkey needs.
+    pyautogui.moveTo(dead_x, dead_y)
+    time.sleep(0.15)
     pyautogui.click(dead_x, dead_y)
     time.sleep(0.4)
+    pyautogui.press("esc")
+    time.sleep(t.after_esc)
     log(f"deselected text (click dead-space at {dead_x},{dead_y})")
 
     # 5c. Zoom back to Extents so the save + verify match the clean frame.
