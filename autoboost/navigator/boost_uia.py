@@ -100,6 +100,32 @@ def _choose_dialog_button(labels) -> str | None:
     return None
 
 
+def _scroll_positions(view_size_pct) -> list[float]:
+    """Vertical ScrollPattern stops (percent of the scroll range) that sweep a
+    virtualized list top to bottom with overlap between consecutive viewports,
+    so no band of rows is ever skipped. `view_size_pct` is the viewport as a
+    percent of the content (UIA CurrentVerticalViewSize). Empty when everything
+    already fits one viewport. Pure logic -- unit-tested without a live window.
+
+    Overlap proof: a step of S in scroll-percent moves the viewport top by
+    S*(100-view)/100 content-percent; with S = 0.6*view that is always < view,
+    so consecutive viewports overlap for every view size."""
+    try:
+        view = float(view_size_pct)
+    except (TypeError, ValueError):
+        view = 10.0
+    if view >= 99.5:
+        return []
+    view = max(0.5, view)
+    step = view * 0.6
+    out: list[float] = []
+    pos = 0.0
+    while pos < 100.0:
+        pos = min(100.0, pos + step)
+        out.append(round(pos, 3))
+    return out
+
+
 class BoostUIA:
     """Thin UIA facade over the two Boost windows."""
 
@@ -124,6 +150,7 @@ class BoostUIA:
                                  # idea (see _grid_table): resolving it via
                                  # child_window is the ~7.5s pig of the profile
         self.last_value = ""   # last value observed by a set operation (for tests)
+        self.last_scroll_info = ""  # how the last parts-list walk went (for logs)
         # pyautogui inserts a 0.1s pause after EVERY call by default. The cycles
         # already sleep explicitly after each action, so that hidden pause is
         # pure overhead (~2s/part across dozens of calls). Halve it, keep a
@@ -559,77 +586,145 @@ class BoostUIA:
 
     def _scroll_list(self, clicks: int) -> None:
         """Wheel-scroll over the parts list (does not change the selection).
-        clicks>0 scrolls up, <0 scrolls down."""
+        clicks>0 scrolls up, <0 scrolls down. Fallback only -- wheel input goes
+        to the FOCUSED window on some Windows/RDP setups, which is how a
+        140-part job once enumerated only its 13 visible rows; _walk_list
+        prefers the UIA ScrollPattern."""
         import pyautogui
         r = self._result_list().rectangle()
         pyautogui.moveTo((r.left + r.right) // 2, (r.top + r.bottom) // 2)
         pyautogui.scroll(clicks)
 
-    def parts(self) -> list[dict]:
-        """Every part in the Home list. The list is virtualized (off-screen rows
-        aren't in the UIA tree), so scroll from the top collecting new names
-        until the set stops growing. Item wrappers may go stale once scrolled
-        away -- use select_part(name), which re-finds the row before clicking."""
+    def _list_scroll_iface(self):
+        """UIA ScrollPattern of the parts list, or None. Preferred over wheel
+        events: positions are COMMANDED (SetScrollPercent), so it is
+        deterministic and immune to focus/hover routing over RDP."""
+        try:
+            iface = self._result_list().iface_scroll
+            if getattr(iface, "CurrentVerticallyScrollable", False):
+                return iface
+        except Exception:
+            pass
+        return None
+
+    def _walk_list(self, visit) -> None:
+        """Sweep the virtualized parts list top to bottom, calling visit(rows)
+        with the rows realized at each stop; visit returns True to stop early.
+        Off-screen rows are NOT in the UIA tree, so any enumeration or search
+        must physically move the list. The first visit happens before any
+        scrolling, so a caller looking for an already-visible row never moves
+        the list at all. Prefers the ScrollPattern (overlapping viewport-sized
+        steps from _scroll_positions); falls back to wheel scrolling in small
+        steps with Home foregrounded first. Records a one-line summary in
+        self.last_scroll_info for the job log."""
         import time
-        lst = self._result_list()
+
+        def rows():
+            try:
+                return self._scan_visible_parts(self._result_list())
+            except Exception:
+                return []
+
+        first = rows()
+        if visit(first):
+            self.last_scroll_info = "walk: found in current viewport"
+            return
+
+        iface = self._list_scroll_iface()
+        if iface is not None:
+            try:
+                view = float(iface.CurrentVerticalViewSize)
+                est = (int(round(len(first) * 100.0 / view))
+                       if first and 0 < view < 100 else None)
+                iface.SetScrollPercent(-1.0, 0.0)      # from the very top
+                time.sleep(0.15)
+                if visit(rows()):
+                    self.last_scroll_info = "walk: pattern, found at top"
+                    return
+                stops = _scroll_positions(view)
+                for pos in stops:
+                    iface.SetScrollPercent(-1.0, float(pos))
+                    time.sleep(0.12)
+                    if visit(rows()):
+                        self.last_scroll_info = f"walk: pattern, stopped at {pos:.0f}%"
+                        return
+                try:
+                    iface.SetScrollPercent(-1.0, 0.0)  # leave the list at the top
+                except Exception:
+                    pass
+                self.last_scroll_info = (f"walk: pattern, {len(stops)} steps"
+                                         + (f", est ~{est} rows" if est else ""))
+                return
+            except Exception as exc:  # noqa: BLE001 - fall back to the wheel
+                self.last_scroll_info = f"walk: pattern failed ({exc!r}), wheel fallback"
+
+        # Wheel fallback: foreground Home first so the wheel reaches the list,
+        # small steps so no viewport-band is skipped, stop when the visible
+        # rows stop changing.
+        try:
+            try:
+                self._foreground(self._home_wrapper())
+            except Exception:
+                pass
+            self._scroll_list(2000)                    # jump to the top
+            time.sleep(0.2)
+            if visit(rows()):
+                return
+            stagnant, sig = 0, ()
+            for _ in range(400):
+                self._scroll_list(-3)                  # ~a dozen rows, overlapping
+                time.sleep(0.12)
+                cur = rows()
+                if visit(cur):
+                    return
+                new_sig = tuple(p["name"] for p in cur)
+                stagnant = stagnant + 1 if new_sig == sig else 0
+                sig = new_sig
+                if stagnant >= 4:                      # nothing moving -> bottom
+                    break
+            if not self.last_scroll_info.startswith("walk: pattern failed"):
+                self.last_scroll_info = "walk: wheel"
+        except Exception:
+            pass
+
+    def parts(self) -> list[dict]:
+        """Every part in the Home list, in list order. The list is virtualized,
+        so _walk_list sweeps it while we harvest new names at every stop. Item
+        wrappers may go stale once scrolled away -- use select_part(name), which
+        re-finds the row before clicking."""
         by_name: dict[str, dict] = {}
         order: list[str] = []
 
-        def collect():
-            for p in self._scan_visible_parts(lst):
+        def visit(rows) -> bool:
+            for p in rows:
                 if p["name"] not in by_name:
                     by_name[p["name"]] = p
                     order.append(p["name"])
+            return False
 
-        collect()
-        try:
-            self._scroll_list(2000)          # jump to the top
-            time.sleep(0.2)
-            collect()
-            stagnant = 0
-            for _ in range(60):
-                before = len(by_name)
-                self._scroll_list(-250)      # step down
-                time.sleep(0.12)
-                collect()
-                stagnant = 0 if len(by_name) > before else stagnant + 1
-                if stagnant >= 4:            # several steps, no new rows -> bottom
-                    break
-        except Exception:
-            pass
+        self._walk_list(visit)
         return [by_name[n] for n in order]
 
     def select_part(self, name: str) -> bool:
-        """Click the part whose Description equals `name`, scrolling the
-        (virtualized) list to bring it into view if needed. Returns success."""
-        import time
-        lst = self._result_list()
+        """Click the part whose Description equals `name`, sweeping the
+        (virtualized) list to bring it into view if needed. The pre-scroll
+        first visit keeps the common case fast: during a job the wanted row is
+        the current/next one and is already on screen, so nothing moves."""
+        done = {"ok": False}
 
-        def try_click() -> bool:
-            for p in self._scan_visible_parts(lst):
+        def visit(rows) -> bool:
+            for p in rows:
                 if p["name"] == name:
                     try:
                         p["item"].click_input()
+                        done["ok"] = True
                         return True
                     except Exception:
-                        return False
+                        return False    # stale wrapper -- keep sweeping
             return False
 
-        if try_click():
-            return True
-        try:
-            self._scroll_list(2000)          # to the top, then step down
-            time.sleep(0.2)
-            if try_click():
-                return True
-            for _ in range(60):
-                self._scroll_list(-250)
-                time.sleep(0.12)
-                if try_click():
-                    return True
-        except Exception:
-            pass
-        return False
+        self._walk_list(visit)
+        return done["ok"]
 
     def open_part_in_design(self, name: str | None = None, timeout: int = 25) -> bool:
         """Open a part into Design view: optionally select `name` in the list,

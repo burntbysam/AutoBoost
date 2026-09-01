@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.21** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.22** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -81,6 +81,17 @@ the marking is clear of edges/holes → close → next part.
   windows/processes, so it can never touch another app. If it genuinely can't
   get back to Home it **stops the run** instead of plowing the next part into
   a broken screen.
+- **Large parts lists enumerate fully** (0.7.22): the Home list is virtualized —
+  off-screen rows don't exist in the UI tree — and the old collector scrolled it
+  with mouse-wheel events, which on some Windows/RDP setups go to the *focused*
+  window instead of the list. A 140-part job therefore enumerated only its 13
+  visible rows. The list is now swept by commanding the UIA ScrollPattern
+  directly (deterministic, focus-independent) in overlapping viewport-sized
+  steps, harvesting rows at each stop; finding a part for selection uses the
+  same sweep, so off-screen parts select reliably too. Wheel scrolling remains
+  only as a fallback (Home foregrounded first, small steps), and the job log
+  reports how the walk went (`(parts list walk: pattern, 18 steps, est ~140
+  rows)`).
 - **Navigation** (parts list, open/save/close, the Properties/font chain) is
   driven by Windows UI Automation where possible — no fragile image templates —
   with mouse/keyboard for the two owner-drawn dropdowns and the drawing canvas.

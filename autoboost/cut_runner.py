@@ -52,6 +52,8 @@ def run_cut_job(part_names: list[str] | None = None,
         return False
 
     names = part_names or [p["name"] for p in boost.parts()]
+    if not part_names and boost.last_scroll_info:
+        log(f"(parts list {boost.last_scroll_info})")
     if not names:
         log("No parts found in the Home list.")
         return False
