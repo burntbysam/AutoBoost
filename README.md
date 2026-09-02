@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.23** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.24** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -105,6 +105,17 @@ the marking is clear of edges/holes → close → next part.
   a slow cutting-program 'Open' is retried once (with a late-arrival check);
   and recovery no longer "dismisses" Design's untitled floating tool strips
   (194 pointless Esc presses in one run).
+- **Run on the parts selected in Boost** (0.7.24): multi-select parts right in
+  the Home list (Ctrl/Shift-click — scattered singles and groups both work),
+  tick **"Only the parts selected (highlighted) in Boost's Home list"** in the
+  GUI (or pass `--selected` to any CLI runner), and the job runs exactly those
+  — no typing out fifty part numbers for a partial re-run. The selection is
+  read once at Start via each row's UIA SelectionItemPattern while the
+  ScrollPattern sweep walks the whole virtualized list; the sweep never
+  clicks, so it can't disturb the highlights, and off-screen highlighted rows
+  are found too. The log reports the scan (`selection scan: 49 selected, 0
+  unreadable, ...`), and "nothing selected" gives a clear message instead of
+  silently running everything.
 - **Navigation** (parts list, open/save/close, the Properties/font chain) is
   driven by Windows UI Automation where possible — no fragile image templates —
   with mouse/keyboard for the two owner-drawn dropdowns and the drawing canvas.
@@ -146,7 +157,9 @@ py -m autoboost.gui          # window with Start/Cancel/Stop and a live log
 pyw -m autoboost.gui         # same, without a console window
 ```
 All three jobs from one window: pick the mode (stencil + cut / stencil only /
-cut only), optionally list specific parts, hit **Start**. The log pane shows
+cut only), optionally list specific parts — or Ctrl/Shift-click the parts in
+Boost's own Home list and tick **"Only the parts selected (highlighted) in
+Boost's Home list"** — then hit **Start**. The log pane shows
 exactly what the console runners would print, and **Save Log…** writes it to a
 file. **Cancel** is graceful — the run stops before the *next* part, so the
 current part finishes (or recovers to Home) and nothing is left half-done.

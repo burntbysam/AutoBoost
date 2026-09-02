@@ -48,15 +48,29 @@ def run_full_job(part_names: list[str] | None = None,
                  do_stencil: bool = True,
                  do_cut: bool = True,
                  max_consecutive_failures: int = 5,
+                 from_selection: bool = False,
                  log=print) -> bool:
     boost = BoostUIA()
     if not boost.has_home():
         log("HomeZone window not found. Put Boost on the Home screen and retry.")
         return False
 
-    names = part_names or [p["name"] for p in boost.parts()]
-    if not part_names and boost.last_scroll_info:
-        log(f"(parts list {boost.last_scroll_info})")
+    if from_selection:
+        # Run exactly the parts highlighted in Boost's Home list. Captured once
+        # here, BEFORE any processing -- the job's own row clicks replace the
+        # selection as it works.
+        names = [p["name"] for p in boost.selected_parts()]
+        if boost.last_scroll_info:
+            log(f"(parts list {boost.last_scroll_info}; {boost.last_value})")
+        if not names:
+            log("No parts are selected (highlighted) in the Home list. "
+                "Ctrl/Shift-click the parts to run in Boost, then Start again.")
+            return False
+        log(f"Running the {len(names)} part(s) selected in the Home list.")
+    else:
+        names = part_names or [p["name"] for p in boost.parts()]
+        if not part_names and boost.last_scroll_info:
+            log(f"(parts list {boost.last_scroll_info})")
     if not names:
         log("No parts found in the Home list.")
         return False
@@ -130,6 +144,9 @@ def main() -> int:
                     help="Run only the cutting phase for every part (skip stenciling).")
     ap.add_argument("--max-failures", type=int, default=5,
                     help="Stop after this many consecutive failures (default: 5).")
+    ap.add_argument("--selected", action="store_true",
+                    help="Run only the parts currently selected (highlighted) "
+                         "in the Home list; overrides --parts.")
     args = ap.parse_args()
 
     if args.stencil_only and args.cut_only:
@@ -143,7 +160,8 @@ def main() -> int:
                      angular=args.angular,
                      do_stencil=not args.cut_only,
                      do_cut=not args.stencil_only,
-                     max_consecutive_failures=args.max_failures)
+                     max_consecutive_failures=args.max_failures,
+                     from_selection=args.selected)
     except KeyboardInterrupt:
         print("\nInterrupted.")
         return 1

@@ -161,12 +161,22 @@ class App:
             frm, text="Parts  (blank = every part in the Home list)")
         parts_row.pack(fill="x", **pad)
         self.parts = tk.StringVar()
-        parts_entry = ttk.Entry(parts_row, textvariable=self.parts)
-        parts_entry.pack(fill="x", padx=8, pady=(4, 0))
-        self._inputs.append(parts_entry)
+        self._parts_entry = ttk.Entry(parts_row, textvariable=self.parts)
+        self._parts_entry.pack(fill="x", padx=8, pady=(4, 0))
+        self._inputs.append(self._parts_entry)
         ttk.Label(parts_row, foreground="gray",
                   text="Separate with spaces or commas, e.g.  8604300I-1, 8604301I-1"
-                  ).pack(anchor="w", padx=8, pady=(0, 4))
+                  ).pack(anchor="w", padx=8, pady=(0, 2))
+        # Or skip the typing: multi-select the parts in Boost's own Home list
+        # (Ctrl/Shift-click), tick this, hit Start. The job reads the
+        # highlighted rows at Start and runs exactly those.
+        self.use_selection = tk.BooleanVar(value=False)
+        sel_chk = ttk.Checkbutton(
+            parts_row,
+            text="Only the parts selected (highlighted) in Boost's Home list",
+            variable=self.use_selection, command=self._sync_parts_entry_state)
+        sel_chk.pack(anchor="w", padx=8, pady=(0, 4))
+        self._inputs.append(sel_chk)
 
         # --- options (font + angular positions are fixed to the shop standard;
         # the CLI runners keep --font/--angular for calibration work)
@@ -308,10 +318,13 @@ class App:
                 "AutoBoost", "Max failures and start delay must be whole numbers.")
             return
 
-        part_names = [p for p in re.split(r"[\s,;]+", self.parts.get().strip()) if p]
+        use_sel = bool(self.use_selection.get())
+        part_names = ([] if use_sel else
+                      [p for p in re.split(r"[\s,;]+", self.parts.get().strip()) if p])
         mode = self.mode.get()
         params = dict(
             parts=part_names or None,
+            from_selection=use_sel,
             font=DEFAULT_FONT,
             angular=None,
             do_stencil=(mode != "cut"),
@@ -332,7 +345,9 @@ class App:
         self._t0 = time.monotonic()
         label = {"full": "stencil + cut", "stencil": "stencil only",
                  "cut": "cut only"}[mode]
-        scope = f"{len(part_names)} listed part(s)" if part_names else "every part in the Home list"
+        scope = ("the parts selected in Boost's Home list" if use_sel
+                 else f"{len(part_names)} listed part(s)" if part_names
+                 else "every part in the Home list")
         self._append(f"\n===== START: {label}, {scope} =====")
         self.status.configure(
             text=f"Running ({label})... Cancel = after this part; Stop = now.")
@@ -374,10 +389,19 @@ class App:
             pass
         _async_raise(self.worker.ident, HardStop)
 
+    def _sync_parts_entry_state(self) -> None:
+        """Grey the typed-parts box while the 'selected in Boost' checkbox is
+        driving the job -- the two inputs are mutually exclusive."""
+        self._parts_entry.configure(
+            state="disabled" if self.use_selection.get() else "normal")
+
     def _set_running(self, running: bool) -> None:
         state = "disabled" if running else "normal"
         for w in self._inputs:
             w.configure(state=state)
+        if not running:
+            self._sync_parts_entry_state()   # keep the entry greyed if the
+                                             # selection checkbox is ticked
         self.start_btn.configure(state="disabled" if running else "normal")
         self.cancel_btn.configure(state="normal" if running else "disabled")
         self.stop_btn.configure(state="normal" if running else "disabled")
@@ -423,6 +447,7 @@ class App:
                                   do_stencil=params["do_stencil"],
                                   do_cut=params["do_cut"],
                                   max_consecutive_failures=params["max_failures"],
+                                  from_selection=params["from_selection"],
                                   log=log)
                 log(f"Elapsed: {time.time() - t0:.0f}s")
                 self.q.put(_Done(ok))

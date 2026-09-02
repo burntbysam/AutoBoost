@@ -121,6 +121,20 @@ def _looks_like_dialog(win) -> bool:
     return False
 
 
+def _item_selected(item):
+    """Selection state of a Home-list row via its UIA SelectionItemPattern:
+    True/False, or None when the pattern can't be read at all -- so callers can
+    tell 'nothing selected' apart from 'selection state unreadable'."""
+    try:
+        return bool(item.is_selected())
+    except Exception:
+        pass
+    try:
+        return bool(item.iface_selection_item.CurrentIsSelected)
+    except Exception:
+        return None
+
+
 def _scroll_positions(view_size_pct) -> list[float]:
     """Vertical ScrollPattern stops (percent of the scroll range) that sweep a
     virtualized list top to bottom with overlap between consecutive viewports,
@@ -725,6 +739,42 @@ class BoostUIA:
             return False
 
         self._walk_list(visit)
+        return [by_name[n] for n in order]
+
+    def selected_parts(self) -> list[dict]:
+        """The parts currently SELECTED (highlighted) in the Home list, in list
+        order. Multi-select in Boost (Ctrl/Shift-click), then run the job on
+        just those -- no typing out fifty part numbers. Works on scattered
+        singles and groups alike: _walk_list sweeps the whole virtualized list
+        reading each realized row's SelectionItemPattern, and neither the
+        ScrollPattern sweep nor the wheel fallback clicks anything, so the
+        selection itself is never disturbed. (WPF keeps selection state for
+        off-screen rows, so scrolled-away highlights survive the sweep too.)
+        Read this BEFORE processing starts -- the job's own row clicks replace
+        the selection. A scan summary lands in self.last_value so an empty
+        result is diagnosable: 'nothing was selected' reads differently from
+        'the selection state was unreadable'."""
+        by_name: dict[str, dict] = {}
+        order: list[str] = []
+        stats = {"sightings": 0, "unreadable": 0}
+
+        def visit(rows) -> bool:
+            for p in rows:
+                stats["sightings"] += 1
+                if p["name"] in by_name:
+                    continue
+                sel = _item_selected(p["item"])
+                if sel is None:
+                    stats["unreadable"] += 1
+                elif sel:
+                    by_name[p["name"]] = p
+                    order.append(p["name"])
+            return False
+
+        self._walk_list(visit)
+        self.last_value = (f"selection scan: {len(order)} selected, "
+                           f"{stats['unreadable']} unreadable, "
+                           f"{stats['sightings']} row sightings")
         return [by_name[n] for n in order]
 
     def select_part(self, name: str) -> bool:
