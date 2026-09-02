@@ -21,7 +21,7 @@ import time
 
 from .navigator.boost_uia import BoostUIA
 from .cut_cycle import process_cut
-from .stencil_runner import _stop_requested
+from .stencil_runner import _pause_gate, _stop_requested
 
 
 def _recover_to_home(boost: BoostUIA, log=print) -> None:
@@ -76,7 +76,7 @@ def run_cut_job(part_names: list[str] | None = None,
     seen: set[str] = set()
     duplicates: list[str] = []
     for i, name in enumerate(names, 1):
-        if _stop_requested():
+        if _stop_requested() or not _pause_gate(log):
             log("Stop requested -- halting.")
             break
         log(f"\n=== [{i}/{len(names)}] {name} ===")

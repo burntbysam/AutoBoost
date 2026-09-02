@@ -1,7 +1,10 @@
 """AutoBoost control panel: run the jobs from a window instead of the console.
 
 Start/Cancel/Stop buttons, a live log pane, and a Save Log button -- everything
-the console runners print lands in the window instead. Under the hood it drives the
+the console runners print lands in the window instead. While a job runs, a slim
+always-on-top status bubble sits at the bottom-right of the screen (Boost buries
+this window within seconds): Stop / Cancel / Pause, an X-of-Y progress bar,
+ok/skip tallies and the latest log line -- see StatusBubble. Under the hood it drives the
 exact same job loop as the CLI runners (`full_runner.run_full_job`), so the
 duplicate guard, consecutive-failure auto-stop, and end-of-run summary are
 identical:
@@ -58,6 +61,7 @@ from tkinter.scrolledtext import ScrolledText
 
 from . import __release__
 from . import updater
+from .progress import Progress
 
 DEFAULT_FONT = "EasyType-L=10mm"
 
@@ -116,6 +120,88 @@ class _UpdateApplied:
         self.msg = msg
 
 
+class StatusBubble:
+    """Slim always-on-top strip pinned to the bottom-right of the screen while
+    a job runs. AutoBoost's own window is buried under the maximized Boost, so
+    this is the only live surface: Stop / Cancel / Pause, a progress bar (X of
+    Y), ok/skip tallies, the part in work, and the latest log line.
+
+    Vision safety is why it is a STRIP and not a panel: every placement/verify
+    screenshot contains it, but the vision crop excludes the bottom 45px of the
+    Boost window (its status-bar band). At H + MARGIN <= 44px the bubble sits
+    entirely inside that band even when Boost's bottom edge is the screen's
+    bottom edge (no taskbar), so it can never enter a placement or verify
+    frame. Its small updates are also far too small to outrank the font
+    dropdown in the dropdown-detection diff. Draggable (click-drag anywhere on
+    it) in case it covers something the operator needs. Created on Start,
+    destroyed at END."""
+
+    W, H, MARGIN = 640, 36, 4
+
+    def __init__(self, app: "App"):
+        self.app = app
+        top = self.top = tk.Toplevel(app.root)
+        top.overrideredirect(True)          # no title bar
+        top.attributes("-topmost", True)    # above the maximized Boost
+        frm = ttk.Frame(top, relief="raised", borderwidth=1)
+        frm.pack(fill="both", expand=True)
+        self.stop_btn = ttk.Button(frm, text="Stop", width=5, command=app._stop)
+        self.stop_btn.pack(side="left", padx=(4, 2), pady=2)
+        self.cancel_btn = ttk.Button(frm, text="Cancel", width=7,
+                                     command=app._cancel)
+        self.cancel_btn.pack(side="left", padx=2, pady=2)
+        self.pause_btn = ttk.Button(frm, text="Pause", width=7,
+                                    command=app._toggle_pause)
+        self.pause_btn.pack(side="left", padx=2, pady=2)
+        self.bar = ttk.Progressbar(frm, length=110, mode="determinate")
+        self.bar.pack(side="left", padx=6)
+        self.label = ttk.Label(frm, text="starting...", anchor="w",
+                               font=("Segoe UI", 8))
+        self.label.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        sw, sh = top.winfo_screenwidth(), top.winfo_screenheight()
+        top.geometry(f"{self.W}x{self.H}"
+                     f"+{sw - self.W - self.MARGIN}+{sh - self.H - self.MARGIN}")
+        self._dx = self._dy = 0
+        for w in (frm, self.label, self.bar):
+            w.bind("<Button-1>", self._drag_start)
+            w.bind("<B1-Motion>", self._drag_move)
+        top.lift()
+
+    def _drag_start(self, e) -> None:
+        self._dx = e.x_root - self.top.winfo_x()
+        self._dy = e.y_root - self.top.winfo_y()
+
+    def _drag_move(self, e) -> None:
+        self.top.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
+
+    def update(self, prog: Progress) -> None:
+        try:
+            if prog.total:
+                self.bar.configure(maximum=prog.total, value=prog.completed)
+            self.label.configure(text=prog.summary()[:120])
+        except Exception:
+            pass
+
+    def set_paused(self, paused: bool) -> None:
+        try:
+            self.pause_btn.configure(text="Resume" if paused else "Pause")
+        except Exception:
+            pass
+
+    def disable(self, *names: str) -> None:
+        for n in names:
+            try:
+                getattr(self, n).configure(state="disabled")
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+
+
 class App:
     POLL_MS = 100  # how often the UI drains the worker's log queue
 
@@ -127,6 +213,8 @@ class App:
         self.worker: threading.Thread | None = None
         self._cancelled = False
         self._stopped = False
+        self.bubble: StatusBubble | None = None   # the on-top strip, while running
+        self.progress = Progress()                # parsed from the log stream
         self._t0 = time.monotonic()   # elapsed-stamp origin; re-zeroed when a job
                                       # Starts (see _start) so stamps read as job
                                       # time. Until then, time-since-launch.
@@ -233,6 +321,11 @@ class App:
         self.log.insert("end", text + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+        # The status bubble is a view over this same stream: parse progress
+        # from the raw (un-stamped) line and refresh it.
+        self.progress.feed(msg)
+        if self.bubble is not None:
+            self.bubble.update(self.progress)
 
     def _clear_log(self) -> None:
         self.log.configure(state="normal")
@@ -336,6 +429,12 @@ class App:
         self._cancelled = False
         self._stopped = False
         self._set_running(True)
+        # Fresh progress + the on-top status strip for this job (Boost will
+        # cover this window within seconds).
+        self.progress = Progress()
+        if self.bubble is not None:
+            self.bubble.close()
+        self.bubble = StatusBubble(self)
         # Zero the elapsed-time clock here so every stamp measures JOB time, not
         # time-since-launch: the operator's reading-the-panel pause and the
         # version check (~20s in earlier logs) no longer inflate the numbers.
@@ -358,6 +457,8 @@ class App:
     def _cancel(self) -> None:
         self._cancelled = True
         self.cancel_btn.configure(state="disabled")
+        if self.bubble is not None:
+            self.bubble.disable("cancel_btn")
         self.status.configure(text="Cancelling -- finishing the current part...")
         self._append("[cancel requested -- the run stops before the next part]")
         try:
@@ -380,6 +481,8 @@ class App:
         self._stopped = True
         self.stop_btn.configure(state="disabled")
         self.cancel_btn.configure(state="disabled")
+        if self.bubble is not None:
+            self.bubble.disable("stop_btn", "cancel_btn", "pause_btn")
         self.status.configure(text="STOPPING NOW -- aborting wherever the job is...")
         self._append("[STOP -- hard-stopping now; Boost may be left mid-part]")
         try:
@@ -388,6 +491,26 @@ class App:
         except Exception:
             pass
         _async_raise(self.worker.ident, HardStop)
+
+    def _toggle_pause(self) -> None:
+        """Pause/Resume from the status bubble. Honoured BETWEEN parts, like
+        Cancel: the current part always finishes (or recovers to Home) first, so
+        Boost is never left mid-cycle. Resume just clears the flag."""
+        try:
+            from .stencil_runner import PAUSE, request_pause
+        except Exception:
+            return
+        paused = not PAUSE.is_set()
+        request_pause(paused)
+        if paused:
+            self._append("[pause requested -- the run holds before the next part]")
+            self.status.configure(
+                text="Pausing -- finishes the current part, then waits for Resume.")
+        else:
+            self._append("[resume requested]")
+            self.status.configure(text="Resumed.")
+        if self.bubble is not None:
+            self.bubble.set_paused(paused)
 
     def _sync_parts_entry_state(self) -> None:
         """Grey the typed-parts box while the 'selected in Boost' checkbox is
@@ -421,7 +544,7 @@ class App:
             except Exception:
                 pass
             try:
-                from .stencil_runner import STOP
+                from .stencil_runner import STOP, PAUSE
                 from .full_runner import run_full_job
             except Exception as exc:  # noqa: BLE001 - report into the log pane
                 log(f"Could not load the automation stack: {exc!r}")
@@ -430,6 +553,7 @@ class App:
                 return
 
             STOP.clear()
+            PAUSE.clear()
             try:
                 if params["delay"]:
                     log(f"Starting in {params['delay']}s -- put Boost on the Home screen.")
@@ -484,6 +608,14 @@ class App:
 
     def _finish(self, ok: bool) -> None:
         self._set_running(False)
+        if self.bubble is not None:
+            self.bubble.close()
+            self.bubble = None
+        try:                                   # never leave the next job paused
+            from .stencil_runner import request_pause
+            request_pause(False)
+        except Exception:
+            pass
         if self._stopped:
             self.status.configure(
                 text="Hard-stopped. Check Boost -- it may be mid-part.")

@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.24** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.25** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -116,6 +116,17 @@ the marking is clear of edges/holes → close → next part.
   are found too. The log reports the scan (`selection scan: 49 selected, 0
   unreadable, ...`), and "nothing selected" gives a clear message instead of
   silently running everything.
+- **Status bubble + Pause** (0.7.25): AutoBoost's window is buried under the
+  maximized Boost within seconds of Start, so a slim always-on-top strip now
+  sits at the bottom-right of the screen for the life of the job: **Stop /
+  Cancel / Pause** buttons, an **X-of-Y progress bar**, ok/skip tallies, the
+  part in work, and the latest log line (draggable if it's in the way). It is
+  deliberately a ≤36px strip, not a panel: the vision crop excludes the bottom
+  45px of the Boost window, so a bubble confined to that band can never appear
+  in a placement or verify frame. **Pause** holds the run *between* parts —
+  the current part always finishes (or recovers to Home) first, so Boost is
+  never left mid-cycle; **Resume** continues. Progress is parsed from the log
+  stream the runners already emit (`autoboost/progress.py`).
 - **Navigation** (parts list, open/save/close, the Properties/font chain) is
   driven by Windows UI Automation where possible — no fragile image templates —
   with mouse/keyboard for the two owner-drawn dropdowns and the drawing canvas.
@@ -161,8 +172,12 @@ cut only), optionally list specific parts — or Ctrl/Shift-click the parts in
 Boost's own Home list and tick **"Only the parts selected (highlighted) in
 Boost's Home list"** — then hit **Start**. The log pane shows
 exactly what the console runners would print, and **Save Log…** writes it to a
-file. **Cancel** is graceful — the run stops before the *next* part, so the
-current part finishes (or recovers to Home) and nothing is left half-done.
+file. While a job runs, a slim **status bubble** pinned to the bottom-right of
+the screen stays on top of Boost with Stop / Cancel / Pause, an X-of-Y
+progress bar, and the latest log line. **Cancel** is graceful — the run stops
+before the *next* part, so the current part finishes (or recovers to Home) and
+nothing is left half-done. **Pause** likewise holds between parts until you
+hit Resume.
 **Stop** (0.7.18) is the hard version — it aborts the run right where it is,
 no waiting for the part boundary, at the cost of possibly leaving Boost
 mid-part for you to clean up by hand; prefer Cancel unless a part is stuck and

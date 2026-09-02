@@ -28,10 +28,23 @@ from .part_cycle import process_open_part
 # mid-action -- the current part finishes (or recovers to Home) first.
 STOP = threading.Event()
 
+# Pause flag (the GUI's status-bubble Pause/Resume). Like STOP it is honoured
+# only BETWEEN parts -- the current part always finishes first, so Boost is
+# never left mid-cycle -- and a stop request while paused still halts.
+PAUSE = threading.Event()
+
 
 def request_stop() -> None:
     """Ask the running job loop to halt before the next part."""
     STOP.set()
+
+
+def request_pause(on: bool) -> None:
+    """Hold the job before its next part (True) or let it continue (False)."""
+    if on:
+        PAUSE.set()
+    else:
+        PAUSE.clear()
 
 
 def _stop_requested() -> bool:
@@ -42,6 +55,20 @@ def _stop_requested() -> bool:
         return keyboard.is_pressed("q")
     except Exception:
         return False
+
+
+def _pause_gate(log=print) -> bool:
+    """Block while paused. Returns False if a stop arrived meanwhile (the
+    caller should halt), True to carry on with the next part."""
+    if not PAUSE.is_set():
+        return True
+    log("[paused before the next part -- hit Resume to continue]")
+    while PAUSE.is_set() and not _stop_requested():
+        time.sleep(0.5)
+    if _stop_requested():
+        return False
+    log("[resumed]")
+    return True
 
 
 def _recover_to_home(log=print) -> None:
@@ -93,7 +120,7 @@ def run_job(part_names: list[str] | None = None,
     seen: set[str] = set()          # part numbers already processed this run
     duplicates: list[str] = []      # exact names that recurred -> skipped + flagged
     for i, name in enumerate(names, 1):
-        if _stop_requested():
+        if _stop_requested() or not _pause_gate(log):
             log("Stop requested -- halting.")
             break
         log(f"\n=== [{i}/{len(names)}] {name} ===")
