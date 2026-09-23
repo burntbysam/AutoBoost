@@ -135,6 +135,19 @@ def _item_selected(item):
         return None
 
 
+def _program_rank(name: str) -> int:
+    """Order cutting programs by their trailing number ('Cut1' < 'Cut2' <
+    'Cut12') so the NEWEST one -- the row 'New' just created -- can be picked
+    when a part already carried programs. Names without a number rank last."""
+    m = re.search(r"(\d+)\s*$", name or "")
+    return int(m.group(1)) if m else -1
+
+
+_CUT_OPEN_AUTOID_RE = re.compile(r"^Part\.Detail\.CutSolutions\.List\.(.+)\.OpenSolution$")
+_CUT_ANGULAR_AUTOID_RE = re.compile(
+    r"^Part\.Detail\.CutSolutions\.List\.(.+)\.Detail\.PermittedNestingOrientations$")
+
+
 def _scroll_positions(view_size_pct) -> list[float]:
     """Vertical ScrollPattern stops (percent of the scroll range) that sweep a
     virtualized list top to bottom with overlap between consecutive viewports,
@@ -888,12 +901,12 @@ class BoostUIA:
                 return t
         return None
 
-    def _find_home_by_autoids(self, autoids, control_type="Button"):
+    def _find_home_by_autoids(self, autoids, control_type="Button", timeout=0):
         home = self.home()
         for aid in autoids:
             try:
                 b = home.child_window(auto_id=aid, control_type=control_type)
-                if b.exists(timeout=0):
+                if b.exists(timeout=timeout):
                     return b.wrapper_object()
             except Exception:
                 continue
@@ -934,15 +947,25 @@ class BoostUIA:
                 return c.wrapper_object()
         except Exception:
             pass
-        # Fallback: the ComboBox directly under the '(Job)' label.
         home = self._home_wrapper()
+        combos = home.descendants(control_type="ComboBox")
+        # The pinned id names 'Cut1'. A part that already carried a program gets
+        # 'Cut2' (or higher) from 'New' -- take the NEWEST program's combo.
+        cands = []
+        for c in combos:
+            m = _CUT_ANGULAR_AUTOID_RE.match(_auto_id(c))
+            if m:
+                cands.append((m.group(1), c))
+        if cands:
+            return max(cands, key=lambda nc: _program_rank(nc[0]))[1]
+        # Fallback: the ComboBox directly under the '(Job)' label.
         labels = [t for t in home.descendants(control_type="Text")
                   if _text(t) == self.ANGULAR_JOB_LABEL]
         if not labels:
             return None
         lr = labels[0].rectangle()
         best = None
-        for c in home.descendants(control_type="ComboBox"):
+        for c in combos:
             r = c.rectangle()
             below = 0 <= r.top - lr.bottom < 45
             aligned = abs(r.left - lr.left) < 80
@@ -1045,37 +1068,80 @@ class BoostUIA:
     def find_cut_open_button(self):
         """The 'Open' button on the newly-created cutting-program row.
 
-        Returns (wrapper, how) or (None, reason). Prefers the pinned auto_id;
-        otherwise the top-most 'Open' below the Cutting Programs header (the
-        program row sits directly under it; the Design 'Open' is above)."""
-        b = self._find_home_by_autoids(self.CUT_OPEN_AUTOIDS)
+        Returns (wrapper, how) or (None, reason). Three strategies:
+          1. the pinned 'Cut1' auto_id -- waited on briefly, because the row
+             'New' creates renders a beat after the click (three parts in the
+             0.7.25 run missed an instant check and fell through to a 40s tree
+             walk that then clicked the wrong thing);
+          2. any 'CutSolutions.List.<name>.OpenSolution' button, NEWEST program
+             first (a part that already had Cut1 gets Cut2 from 'New');
+          3. positional: the top-most 'Open' below the Cutting Programs header
+             (the program row sits directly under it; Design's 'Open' is above).
+        Strategies 2 and 3 share one descendants walk."""
+        b = self._find_home_by_autoids(self.CUT_OPEN_AUTOIDS, timeout=1.5)
         if b is not None:
             return b, "auto_id"
+        buttons = self._home_wrapper().descendants(control_type="Button")
+        cands = []
+        for btn in buttons:
+            m = _CUT_OPEN_AUTOID_RE.match(_auto_id(btn))
+            if m:
+                cands.append((m.group(1), btn))
+        if cands:
+            name, btn = max(cands, key=lambda nb: _program_rank(nb[0]))
+            return btn, f"auto_id:{name}"
         hdr = self._cut_header()
         if hdr is None:
             return None, "'Cutting Programs' header not found"
         hb = hdr.rectangle().bottom
-        below = [(btn.rectangle().top, btn) for btn in self._named_buttons("Open")
-                 if self._cy(btn.rectangle()) > hb]
+        below = [(btn.rectangle().top, btn) for btn in buttons
+                 if _text(btn) == "Open" and self._cy(btn.rectangle()) > hb]
         if not below:
             return None, "no 'Open' below the Cutting Programs header"
         below.sort(key=lambda x: x[0])
         return below[0][1], "positional"
 
     def open_cut_program(self, timeout: int = 25) -> bool:
-        """Click the cutting-program row's 'Open' and wait for the Cut window."""
+        """Click the cutting-program row's 'Open' and wait for the Cut window.
+        The button is scrolled into view first (the Home detail page scrolls;
+        a click on an off-screen row lands on nothing), and a failure records
+        what was clicked and what Boost had on screen -- the 0.7.25 run lost
+        three cuts to 'Cut window did not open' with no clue why."""
         import time
         btn, how = self.find_cut_open_button()
         if btn is None:
             self.last_value = f"<cut 'Open' button not found: {how}>"
             return False
+        try:
+            btn.iface_scroll_item.ScrollIntoView()
+            time.sleep(0.3)
+        except Exception:
+            pass
         btn.click_input()
         self.reset()                      # a new Cut window is opening
         for _ in range(timeout):
             if self.has_cut():
                 return True
             time.sleep(1)
-        self.last_value = "<Cut window did not open>"
+        # Diagnostics for the log: which button, where, and what is on screen.
+        detail = f"open={how}"
+        try:
+            r = btn.rectangle()
+            detail += (f" auto_id={_auto_id(btn)!r} rect=({r.left},{r.top},"
+                       f"{r.right},{r.bottom}) visible={btn.is_visible()} "
+                       f"enabled={btn.is_enabled()}")
+        except Exception as exc:
+            detail += f" button-state-unreadable({exc.__class__.__name__})"
+        try:
+            dialogs = []
+            for d in self.stray_dialogs():
+                labels = [_text(b) for b in d.descendants(control_type="Button")][:6]
+                dialogs.append((_text(d), labels))
+            detail += f" dialogs={dialogs}"
+        except Exception:
+            pass
+        detail += f" foreground={self._foreground_title()!r}"
+        self.last_value = f"<Cut window did not open; {detail}>"
         return False
 
     def create_cut_program(self, angular: str | None = None, log=print) -> bool:

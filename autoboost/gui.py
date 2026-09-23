@@ -43,6 +43,7 @@ Built on tkinter (ships with Python) -- nothing new to install.
 from __future__ import annotations
 
 import ctypes
+import os
 import queue
 import re
 import sys
@@ -59,7 +60,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-from . import __release__
+from . import __release__, __version__
 from . import updater
 from .progress import Progress
 
@@ -337,8 +338,12 @@ class App:
         if not text.strip():
             messagebox.showinfo("AutoBoost", "The log is empty.")
             return
+        # Default to this version's logs folder so the log lands next to the
+        # run's debug overlays (a 0.7.25 log was saved into logs/0.7.22).
+        logs_dir = os.path.join("logs", __version__)
         path = filedialog.asksaveasfilename(
             title="Save log",
+            initialdir=logs_dir if os.path.isdir(logs_dir) else None,
             defaultextension=".log",
             initialfile=time.strftime("autoboost_%Y%m%d_%H%M%S.log"),
             filetypes=[("Log files", "*.log"), ("Text files", "*.txt"),

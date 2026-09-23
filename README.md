@@ -1,6 +1,6 @@
 # AutoBoost
 
-**AutoBoost Beta 0.7.25** — GUI automation for repetitive per-part chores in
+**AutoBoost Beta 0.7.26** — GUI automation for repetitive per-part chores in
 TRUMPF TruTops Boost.
 
 ## Download
@@ -127,6 +127,19 @@ the marking is clear of edges/holes → close → next part.
   the current part always finishes (or recovers to Home) first, so Boost is
   never left mid-cycle; **Resume** continues. Progress is parsed from the log
   stream the runners already emit (`autoboost/progress.py`).
+- **Verify gate tightened to the reserved footprint** (0.7.26): the gate around
+  the placement point was 3× the reserved half-extents "to be generous". On a
+  wide part with the number near one end that reached past the part edge into
+  the void, where Boost's drawing-boundary line repaints as short antialiased
+  dashes — counted as up to 120px of "collision" on perfectly placed markings
+  (three false FAILs across 0.7.18–0.7.25; the magenta box in those overlays
+  was this gate, not a Boost selection marquee). The gate is now the reserved
+  footprint plus 8px (same floors), which placement already guarantees sits on
+  the body. Also: the cutting-program 'Open' lookup waits briefly for the new
+  row to render, prefers the *newest* program by auto_id (a part that already
+  had Cut1 gets Cut2 from 'New'), scrolls the button into view before clicking,
+  and on failure logs which button it clicked and what Boost had on screen;
+  Save Log defaults to this version's `logs\` folder.
 - **Navigation** (parts list, open/save/close, the Properties/font chain) is
   driven by Windows UI Automation where possible — no fragile image templates —
   with mouse/keyboard for the two owner-drawn dropdowns and the drawing canvas.

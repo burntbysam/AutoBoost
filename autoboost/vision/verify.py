@@ -18,7 +18,8 @@ be undone and retried or flagged.
 
 When the caller knows WHERE the number was placed (it always does -- placement
 returned the point), verification is gated to that spot: only changed components
-near the expected placement rectangle count as the marking. The live 0.7.11 run
+touching the expected placement rectangle (the reserved footprint, see
+_gate_rect) count as the marking. The live 0.7.11 run
 failed all five parts on perfectly-placed markings because the tab-bar title
 gained its modified marker, the bottom icon strip re-rendered, and viewport
 frame lines shifted 1px between the two frames -- all far from the placement
@@ -119,14 +120,24 @@ def _gate_rect(expect_point: tuple[int, int],
                expect_half: tuple[int, int] | None,
                x1: int, y1: int) -> tuple[int, int, int, int]:
     """Crop-space rectangle around the expected placement where the marking may
-    appear. Generous on purpose (saving expands the text ~3x and the click point
-    is the rectangle centre, not a corner): 3x the reserved half-extents with a
-    floor. UI junk lives hundreds of px away (tab bar, icon strip, frame lines),
-    so generosity costs nothing."""
+    appear: the RESERVED footprint (placement's half-extents, which already
+    carry a margin over the rendered text and are centred on the click point)
+    plus a small pad, with a floor for tiny/absent extents so a void stamp is
+    still caught.
+
+    It used to be 3x the half-extents "to be generous". That was too generous:
+    on a wide part with the number near one end, a 3x gate reached past the
+    part edge into the void, where Boost's drawing-boundary line repaints
+    (dirty-rect antialiasing jitter, broken into short dashes that dodge the
+    line-shape filter) and was counted as 120px of "collision" on a perfectly
+    placed marking (8624-302-I, 0.7.25; same signature on 8701204I-2 and
+    8640213I-03 earlier). Placement guarantees the reserved footprint sits on
+    the body, so anything outside it can never be our marking."""
     ex, ey = expect_point[0] - x1, expect_point[1] - y1
     hx, hy = expect_half if expect_half else (0, 0)
-    gx = max(3 * hx, 80)
-    gy = max(3 * hy, 40)
+    PAD = 8
+    gx = max(hx + PAD, 80)
+    gy = max(hy + PAD, 40)
     return ex - gx, ey - gy, ex + gx, ey + gy
 
 

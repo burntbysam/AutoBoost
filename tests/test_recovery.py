@@ -166,6 +166,26 @@ def test_vanished_window_is_not_a_dialog():
     assert not _looks_like_dialog(_FakeWindow(boom=True))
 
 
+# --- newest-cutting-program pick (0.7.26) ------------------------------------
+# A part that already carried a program gets 'Cut2' from 'New'; the pinned
+# 'Cut1' ids would then point at the OLD program. _program_rank orders names
+# by their trailing number so the newest row wins.
+
+from autoboost.navigator.boost_uia import _program_rank
+
+
+def test_program_rank_orders_by_trailing_number():
+    assert _program_rank("Cut1") < _program_rank("Cut2") < _program_rank("Cut12")
+    assert max(["Cut1", "Cut2", "Cut10"], key=_program_rank) == "Cut10"
+
+
+def test_program_rank_unnumbered_ranks_last():
+    assert _program_rank("Cut") == -1
+    assert _program_rank("") == -1
+    assert _program_rank(None) == -1
+    assert max(["Cut", "Cut1"], key=_program_rank) == "Cut1"
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

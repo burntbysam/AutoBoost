@@ -446,6 +446,30 @@ def test_verify_gated_rescue_still_fails_faint_void_stamp():
     assert not v.ok, f"faint void stamp at the expected point must FAIL: {v.reason}"
 
 
+def test_verify_gate_ignores_boundary_repaint_past_part_edge():
+    """Live false-FAIL 8624-302-I (0.7.25; same signature on 8701204I-2 and
+    8640213I-03): a wide reservation (half-extents 106px) with the number near
+    the part's LEFT end. The old 3x gate reached ~320px left of the point --
+    past the part edge -- where Boost's drawing-boundary line repaints as short
+    antialiased dashes (each too stubby for the line-shape filter) and racked up
+    120px of 'collision' on a perfectly placed marking. Gated to the reserved
+    footprint, those dashes are outside the gate and ignored; the marking still
+    PASSes and is still DETECTED."""
+    part = (300, 60, 1500, 790)                  # part edge at x=300
+    pre = _canvas(part)
+    post = pre.copy()
+    _yellow_text(post, (500, 420))               # number ~200px from the left edge
+    # Boundary-line repaint jitter 40px LEFT of the part edge (x=260): dashes.
+    for y0 in range(380, 460, 14):
+        post[y0:y0 + 9, 259:261] = DARK          # 2x9 dashes, aspect 4.5
+    ex, half = (560, 415), (106, 20)             # reserved 212x40, centred
+    v = verify_placement(pre, post, DEFAULT, (0, 0, W, H),
+                         expect_point=ex, expect_half=half)
+    assert v.ok, f"boundary repaint past the part edge wrongly FAILed: {v.reason}"
+    assert v.text_px >= 20, f"the real marking must still be DETECTED ({v.reason})"
+    assert "ignored" in v.reason, f"the dashes should be reported as ignored: {v.reason}"
+
+
 def test_text_rectangle_is_wide_and_fits_on_material():
     # A wide part (real 1000mm x 300mm) that fills a ~1450px-wide body: a 13-char
     # number reserves a WIDE, SHORT rectangle and must fit on the material.
